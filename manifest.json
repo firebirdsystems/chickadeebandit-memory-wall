@@ -1,0 +1,113 @@
+{
+  "id": "memory-wall",
+  "contexts": ["household", "shared_space"],
+  "name": "Memory Wall",
+  "version": "1.0.0",
+  "description": "Open a wall for an occasion — a birthday, a farewell, a new arrival — and collect everyone's messages and photos in one place. Share a link and guests can read it, or add to it, without an account.",
+  "entrypoint": "index.html",
+  "runtime": "static",
+  "category": "family",
+  "tags": ["memories", "photos", "guestbook", "celebrations", "birthdays", "sharing"],
+  "icon": "🎉",
+  "nav": { "label": "Memory Wall" },
+  "data_access": {
+    "reads": ["family.members"],
+    "writes": []
+  },
+  "permissions": {
+    "default_audience": "everyone",
+    "requires_approval": false
+  },
+  "storage": "db",
+
+  "db_plaintext_columns": [
+    "post_visibility",
+    "author_name",
+    "body",
+    "source"
+  ],
+
+  "row_policies": {
+    "walls": {
+      "kind": "adult_writable"
+    },
+    "posts": {
+      "kind": "owner_or_visibility",
+      "member_column": "member_id",
+      "visibility_column": "visibility",
+      "everyone_values": ["everyone"],
+      "adult_values": ["everyone", "private"],
+      "column_write_acls": {
+        "status": { "writable_by": ["adult"], "actions": ["update"] }
+      }
+    }
+  },
+
+  "member_references": {
+    "walls": { "column": "created_by", "on_removed": "keep" },
+    "posts": { "column": "member_id", "on_removed": "keep" }
+  },
+
+  "delete_file_list_columns": {
+    "walls": ["cover_file_ids"],
+    "posts": ["file_ids"]
+  },
+  "delete_cascades": {
+    "walls": [
+      { "table": "posts", "foreign_key": "wall_id" }
+    ]
+  },
+
+  "shareable": {
+    "wall": {
+      "table": "walls",
+      "title_column": "title",
+      "columns": [
+        { "column": "occasion_date", "label": "When", "format": "date" },
+        { "column": "description", "label": "About", "format": "multiline" }
+      ],
+      "visible_where": { "column": "status", "values": ["open", "closed"] },
+      "files": { "ids_column": "cover_file_ids", "label": "Cover photo" },
+      "feed": {
+        "label": "Messages",
+        "table": "posts",
+        "fk_column": "wall_id",
+        "columns": [
+          { "column": "author_name", "label": "From", "role": "heading" },
+          { "column": "created_at", "label": "Posted", "format": "datetime", "role": "timestamp" },
+          { "column": "body", "label": "Message", "format": "multiline", "role": "body" }
+        ],
+        "files_column": "file_ids",
+        "where": [
+          { "column": "status", "values": ["published"] },
+          { "column": "visibility", "values": ["everyone"] }
+        ],
+        "parent_where": { "column": "post_visibility", "values": ["everyone"] },
+        "order_column": "created_at",
+        "order": "newest",
+        "max_items": 100,
+        "empty_text": "No messages yet — be the first to add one."
+      },
+      "submit": {
+        "table": "posts",
+        "fk_column": "wall_id",
+        "fields": [
+          { "column": "author_name", "label": "Your name", "type": "text", "required": true, "max_length": 80 },
+          { "column": "body", "label": "Your message", "type": "multiline", "required": true, "max_length": 1000 }
+        ],
+        "fixed_values": {
+          "source": "external",
+          "status": "published",
+          "visibility": "everyone"
+        },
+        "max_submissions": 200,
+        "event": "memory_wall.post_submitted"
+      }
+    }
+  },
+
+  "resource_limits": {
+    "max_db_bytes": 52428800,
+    "max_files_bytes": 1073741824
+  }
+}
