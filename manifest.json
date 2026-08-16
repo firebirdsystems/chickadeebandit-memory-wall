@@ -101,7 +101,7 @@
           "visibility": "everyone"
         },
         "max_submissions": 200,
-        "event": "memory_wall.post_submitted"
+        "event": "memory-wall.post_submitted"
       }
     }
   },
