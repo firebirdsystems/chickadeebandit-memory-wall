@@ -108,6 +108,12 @@
       max-width: 520px; width: 100%; padding: 20px; max-height: 90vh; overflow: auto;
     }
     .link-row { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .search-input {
+      width: 100%; border: 1.5px solid var(--border); border-radius: 8px;
+      padding: 9px 11px; font: inherit; background: var(--surface); color: var(--text);
+      margin-bottom: 10px;
+    }
+    .search-input:focus { outline: none; border-color: var(--accent, #6366f1); }
   </style>
   <base href="/run/memory-wall/">
 </head>
@@ -117,7 +123,14 @@
 </div>
 
 <script type="module">
-import { esc, isAdult, hubConfirm, hubAlert, createFilesHelper, createShareHelper } from "/hub-sdk.js";
+import { esc, isAdult, hubConfirm, hubAlert, createFilesHelper, createShareHelper, searchMatch } from "/hub-sdk.js";
+import {
+  parseIds, isGuestPost, canPostTo, formatDate, formatWhen,
+  memberName as memberNameOf, wallById as wallByIdOf, postAuthor as postAuthorOf,
+  canManageWalls as canManageWallsOf, canModerate as canModerateOf,
+  canEditPost as canEditPostOf, visiblePosts as visiblePostsOf,
+  searchableFields, postSearchableFields,
+} from "./logic.js";
 
 // --- Hub runtime globals (empty in demo mode) --------------------------------
 const CONTEXT = window.__CONTEXT_URL ?? "";
@@ -143,6 +156,8 @@ let walls = [];
 let posts = [];              // posts of the open wall only
 let openWallId = null;
 let view = "list";           // list | wall | new-wall | settings
+let wallQ = "";              // walls-list search (see logic.js searchableFields)
+let postQ = "";              // in-wall message search (postSearchableFields)
 let error = "";
 let notice = "";
 let pendingPhotos = [];      // { id, url, name } uploaded but not yet attached to a post
@@ -152,51 +167,17 @@ let shareLinks = [];
 let shareEntitled = false;
 
 function nowIso() { return new Date().toISOString(); }
-function memberName(id) { return members.find(m => m.id === id)?.name ?? "Someone"; }
-function wallById(id) { return walls.find(w => w.id === id) ?? null; }
 
-/** Every post-management gate. Mirrors the `posts` row policy exactly
- *  (owner_or_visibility: adults write any row, everyone else only their own) —
- *  a cosmetic gate that disagrees with the hub just shows buttons that 403. */
-function canModerate() { return isAdult(currentMember); }
-function canEditPost(post) { return canModerate() || (post.member_id && post.member_id === currentMember?.id); }
-/** `walls` is adult_writable. */
-function canManageWalls() { return isAdult(currentMember); }
-
-/** Hub file ids are UUIDs. Any member can write this column with raw SQL, so
- *  the shape is checked here exactly as the hub checks it before projecting a
- *  share page — a crafted id must never reach a URL we build. */
-function parseIds(raw) {
-  try {
-    const parsed = JSON.parse(raw ?? "[]");
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(v => typeof v === "string" && /^[0-9a-f-]{36}$/.test(v));
-  } catch { return []; }
+// Thin bindings over src/logic.js — the pure functions there take the roster,
+// the wall list and an is-adult flag explicitly so Node can unit-test them.
+function memberName(id) { return memberNameOf(members, id); }
+function wallById(id) { return wallByIdOf(walls, id); }
+function postAuthor(post) { return postAuthorOf(post, members); }
+function canModerate() { return canModerateOf(isAdult(currentMember)); }
+function canEditPost(post) {
+  return canEditPostOf(post, { isAdultMember: isAdult(currentMember), memberId: currentMember?.id });
 }
-
-/** A post is genuinely external only when it has no member id — the hub forces
- *  `member_id` to the caller on every app-originated INSERT, so NULL is the one
- *  signal a member cannot forge. `source` is an ordinary member-writable column
- *  and must not be trusted for this. */
-function isGuestPost(post) { return !post.member_id; }
-
-/** The author line: a member resolves through the roster (so a rename follows
- *  their old posts), a guest keeps the name they typed. */
-function postAuthor(post) {
-  if (post.member_id) return memberName(post.member_id);
-  return post.author_name || "A guest";
-}
-
-function formatDate(value) {
-  if (!value) return "";
-  const d = new Date(value.length === 10 ? `${value}T12:00:00` : value);
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString();
-}
-
-function formatWhen(iso) {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString();
-}
+function canManageWalls() { return canManageWallsOf(isAdult(currentMember)); }
 
 async function db(sql, params = []) {
   if (!DB) return { rows: [] };
@@ -323,6 +304,7 @@ async function createWall(form) {
     walls = [{ ...wall, post_count: 0 }, ...walls];
     openWallId = wall.id;
     posts = [];
+    postQ = "";
     view = "wall";
     error = "";
     render();
@@ -458,7 +440,7 @@ async function discardPendingPhotos() {
 async function createPost(form) {
   const wall = wallById(openWallId);
   if (!wall) return;
-  if (wall.status !== "open") { error = "This wall is closed to new messages."; return render(); }
+  if (!canPostTo(wall)) { error = "This wall is closed to new messages."; return render(); }
   const body = form.body.value.trim();
   if (!body && pendingPhotos.length === 0) { form.body.focus(); return; }
 
@@ -650,11 +632,20 @@ function renderWallCard(wall) {
     </article>`;
 }
 
+// Owns the filtering and the empty states, so the keystroke handler can refresh
+// the list without repeating how it is derived.
+function renderWallCards() {
+  const shown = wallQ ? walls.filter(w => searchMatch(wallQ, searchableFields(w))) : walls;
+  if (shown.length) return shown.map(renderWallCard).join("");
+  if (wallQ) return `<div class="card empty">No walls match "${esc(wallQ)}".</div>`;
+  return `<div class="card empty">No walls yet.${canManageWalls() ? " Open one for the next occasion." : ""}</div>`;
+}
+
 function renderList() {
-  if (!walls.length) {
-    return `<div class="card empty">No walls yet.${canManageWalls() ? " Open one for the next occasion." : ""}</div>`;
-  }
-  return walls.map(renderWallCard).join("");
+  return `
+    ${walls.length ? `<input id="wall-search" class="search-input" type="search"
+      placeholder="Search walls…" aria-label="Search walls" value="${esc(wallQ)}" />` : ""}
+    <div id="wall-list" class="stack">${renderWallCards()}</div>`;
 }
 
 function renderPhotoStrip(fileIds, { removable = false } = {}) {
@@ -695,8 +686,21 @@ function renderPost(post) {
     </article>`;
 }
 
+// Moderated-off posts stay visible to a moderator (visiblePosts), and the
+// search filters whatever that leaves — so hiding a post also drops it out of
+// every other member's search results, not just their wall.
+function renderPostCards() {
+  const visible = visiblePostsOf(posts, isAdult(currentMember));
+  const shown = postQ
+    ? visible.filter(p => searchMatch(postQ, postSearchableFields(p, members)))
+    : visible;
+  if (shown.length) return shown.map(renderPost).join("");
+  if (postQ) return `<div class="card empty">No messages match "${esc(postQ)}".</div>`;
+  return `<div class="card empty">No messages yet.</div>`;
+}
+
 function renderComposer(wall) {
-  if (wall.status !== "open") {
+  if (!canPostTo(wall)) {
     return `<div class="notice">This wall is closed — no new messages.</div>`;
   }
   return `
@@ -726,7 +730,6 @@ function renderWall() {
   const wall = wallById(openWallId);
   if (!wall) return `<div class="card empty">That wall is gone.</div>`;
   const cover = parseIds(wall.cover_file_ids)[0];
-  const visible = posts.filter(p => p.status === "published" || canModerate());
 
   return `
     <div class="topbar">
@@ -747,9 +750,9 @@ function renderWall() {
     ${cover && FILES_URL ? `<img class="cover" src="${esc(files.url(cover))}" alt="" />` : ""}
     ${wall.description ? `<p class="muted" style="margin-bottom:12px">${esc(wall.description)}</p>` : ""}
     ${renderComposer(wall)}
-    <section class="stack">
-      ${visible.length ? visible.map(renderPost).join("") : `<div class="card empty">No messages yet.</div>`}
-    </section>`;
+    ${posts.length ? `<input id="post-search" class="search-input" type="search"
+      placeholder="Search messages…" aria-label="Search messages" value="${esc(postQ)}" />` : ""}
+    <section id="post-list" class="stack">${renderPostCards()}</section>`;
 }
 
 function renderSettings() {
@@ -868,6 +871,20 @@ function render() {
 
 // --- Events ------------------------------------------------------------------
 
+// Re-render only the affected list on each keystroke so the search box keeps
+// focus and the caret does not jump to the end mid-word.
+document.addEventListener("input", (event) => {
+  if (event.target.id === "wall-search") {
+    wallQ = event.target.value;
+    const el = document.getElementById("wall-list");
+    if (el) el.innerHTML = renderWallCards();
+  } else if (event.target.id === "post-search") {
+    postQ = event.target.value;
+    const el = document.getElementById("post-list");
+    if (el) el.innerHTML = renderPostCards();
+  }
+});
+
 document.addEventListener("click", (event) => {
   const target = event.target.closest("button, [data-open-wall]");
   if (!target) return;
@@ -876,6 +893,9 @@ document.addEventListener("click", (event) => {
   if (openId) {
     discardPendingPhotos();
     openWallId = openId;
+    // A query typed on one wall must not silently filter the next one's
+    // messages — the box is gone from view but the state would survive.
+    postQ = "";
     view = "wall";
     error = "";
     loadPosts(openId).then(render).catch((e) => { error = e.message; render(); });
@@ -883,7 +903,7 @@ document.addEventListener("click", (event) => {
   }
   if (target.matches("[data-refresh]")) { refresh(); return; }
   if (target.matches("[data-new-wall]")) { discardPendingPhotos(); view = "new-wall"; error = ""; render(); return; }
-  if (target.matches("[data-back]")) { discardPendingPhotos(); openWallId = null; view = "list"; error = ""; render(); return; }
+  if (target.matches("[data-back]")) { discardPendingPhotos(); openWallId = null; postQ = ""; view = "list"; error = ""; render(); return; }
   if (target.matches("[data-back-to-wall]")) { view = "wall"; error = ""; render(); return; }
   // Leaving the composer for settings abandons any photo uploaded but not yet
   // posted — reclaim it rather than leaving bytes nothing references.

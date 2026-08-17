@@ -20,6 +20,29 @@
   },
   "storage": "db",
 
+  "agenda": {
+    "kind": "event",
+    "label": "Occasion",
+    "source": {
+      "kind": "sql",
+      "query": "SELECT id AS id, title AS title, NULLIF(description, '') AS subtitle, occasion_date AS when_at FROM app_memory_wall__walls WHERE status IN ('open', 'closed') AND occasion_date = :today ORDER BY created_at LIMIT 20"
+    }
+  },
+
+  "glance": {
+    "source": {
+      "kind": "sql",
+      "query": "SELECT title AS title, NULLIF(description, '') AS subtitle, occasion_date AS occasion_on FROM app_memory_wall__walls WHERE status = 'open' AND occasion_date >= :today ORDER BY occasion_date LIMIT 3"
+    },
+    "display": {
+      "template": "list",
+      "title": "title",
+      "subtitle": "subtitle",
+      "when": "occasion_on"
+    },
+    "ambient_card": "countdown"
+  },
+
   "db_plaintext_columns": [
     "post_visibility",
     "author_name",
@@ -42,6 +65,52 @@
       }
     }
   },
+
+  "automation_actions": {
+    "open_wall": {
+      "title": "Open a memory wall",
+      "description": "Open a wall for a date another app already knows about — a birthday on the calendar, a farewell, a new arrival. Only the wall itself is created; every message on it is still written by a person.",
+      "params": {
+        "title": { "type": "text", "label": "Wall title", "required": true },
+        "occasion_date": { "type": "text", "label": "Occasion date (yyyy-mm-dd)", "default": "" },
+        "description": { "type": "text", "label": "About this wall", "default": "" }
+      },
+      "dedupe": { "table": "walls", "column": "source_event_id" },
+      "steps": [
+        {
+          "op": "insert",
+          "table": "walls",
+          "values": {
+            "id": "$uuid",
+            "title": ":title",
+            "occasion_date": ":occasion_date",
+            "description": ":description",
+            "cover_file_ids": "[]",
+            "status": "open",
+            "post_visibility": "everyone",
+            "created_by": "automation",
+            "created_at": "$now",
+            "source_event_id": "$event_id"
+          }
+        }
+      ]
+    }
+  },
+
+  "suggested_automations": [
+    {
+      "title": "Open a wall for a date on the calendar",
+      "description": "A dated occasion opens a wall the day it lands on the calendar, so there is somewhere to collect messages weeks before anyone would have thought to make one.",
+      "trigger_event": "calendar.event_created",
+      "target_app_id": "memory-wall",
+      "action_id": "open_wall",
+      "param_map": {
+        "title": { "kind": "payload_field", "value": "title" },
+        "occasion_date": { "kind": "payload_field", "value": "start_date" },
+        "description": { "kind": "const", "value": "Leave a message for the day." }
+      }
+    }
+  ],
 
   "member_references": {
     "walls": { "column": "created_by", "on_removed": "keep" },
