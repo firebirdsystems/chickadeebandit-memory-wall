@@ -19,6 +19,10 @@
     "requires_approval": false
   },
   "storage": "db",
+  "preload": {
+    "walls": {"sql": "SELECT * FROM app_memory_wall__walls WHERE status IN ('open', 'closed') ORDER BY created_at DESC"},
+    "posts": {"sql": "SELECT wall_id, COUNT(*) AS post_count FROM app_memory_wall__posts WHERE status = 'published' GROUP BY wall_id"}
+  },
 
   "agenda": {
     "kind": "event",
