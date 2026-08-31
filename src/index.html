@@ -123,7 +123,7 @@
 </div>
 
 <script type="module">
-import { esc, isAdult, hubConfirm, hubAlert, createFilesHelper, createShareHelper, searchMatch } from "/hub-sdk.js";
+import { esc, isAdult, hubConfirm, hubAlert, createFilesHelper, createShareHelper, searchMatch, hubToday } from "/hub-sdk.js";
 import {
   parseIds, isGuestPost, canPostTo, formatDate, formatWhen,
   memberName as memberNameOf, wallById as wallByIdOf, postAuthor as postAuthorOf,
@@ -210,7 +210,7 @@ async function loadWalls() {
     walls = [{
       id: "demo-wall",
       title: "Ben's Birthday",
-      occasion_date: new Date().toISOString().slice(0, 10),
+      occasion_date: hubToday(),
       description: "He turns six on Saturday. Leave him something to read.",
       cover_file_ids: "[]",
       status: "open",
