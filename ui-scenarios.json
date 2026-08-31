@@ -1,0 +1,54 @@
+{
+  "scenarios": [
+    {
+      "name": "a moderated-off message and the wall management controls render for an adult and not for a child",
+      "members": { "parent": "adult", "kid": "child" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_memory_wall__walls (id, title, occasion_date, status, post_visibility, created_by, created_at) VALUES ('ui-w1', ?, '2026-03-01', 'open', 'everyone', ?, datetime('now'))",
+          "params": ["Grandma's 80th", "{{parent}}"]
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_memory_wall__posts (id, wall_id, member_id, body, source, status, visibility, created_at) VALUES ('ui-p1', 'ui-w1', ?, ?, 'member', 'published', 'everyone', datetime('now'))",
+          "params": ["{{parent}}", "Eighty years of you."]
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_memory_wall__posts (id, wall_id, member_id, body, source, status, visibility, created_at) VALUES ('ui-p2', 'ui-w1', ?, ?, 'member', 'hidden', 'everyone', datetime('now'))",
+          "params": ["{{parent}}", "Posted this twice by mistake."]
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_memory_wall__posts (id, wall_id, member_id, body, source, status, visibility, created_at) VALUES ('ui-p3', 'ui-w1', ?, ?, 'member', 'published', 'everyone', datetime('now'))",
+          "params": ["{{kid}}", "Love you Grandma."]
+        },
+
+        { "action": "open", "as": "kid" },
+        { "action": "expectVisible", "as": "kid", "selector": "[data-testid=\"wall-card\"][data-wall-id=\"ui-w1\"]" },
+        { "action": "expectCount", "as": "kid", "selector": "[data-testid=\"new-wall\"]", "count": 0 },
+        { "action": "click", "as": "kid", "selector": "[data-testid=\"wall-card\"][data-wall-id=\"ui-w1\"]" },
+        { "action": "expectVisible", "as": "kid", "selector": "[data-testid=\"post-card\"][data-post-id=\"ui-p1\"]" },
+        { "action": "expectCount", "as": "kid", "selector": "[data-testid=\"post-card\"][data-post-id=\"ui-p2\"]", "count": 0 },
+        { "action": "expectNoText", "as": "kid", "text": "Posted this twice by mistake.", "selector": "[data-testid=\"post-list\"]" },
+        { "action": "expectCount", "as": "kid", "selector": "[data-testid=\"post-card\"]", "count": 2 },
+        { "action": "expectCount", "as": "kid", "selector": "[data-testid=\"post-moderate\"]", "count": 0 },
+        { "action": "expectVisible", "as": "kid", "selector": "[data-testid=\"post-delete\"][data-post-id=\"ui-p3\"]" },
+        { "action": "expectCount", "as": "kid", "selector": "[data-testid=\"post-delete\"]", "count": 1 },
+        { "action": "expectCount", "as": "kid", "selector": "[data-testid=\"wall-settings\"]", "count": 0 },
+
+        { "action": "open", "as": "parent" },
+        { "action": "expectVisible", "as": "parent", "selector": "[data-testid=\"wall-card\"][data-wall-id=\"ui-w1\"]" },
+        { "action": "expectVisible", "as": "parent", "selector": "[data-testid=\"new-wall\"]" },
+        { "action": "click", "as": "parent", "selector": "[data-testid=\"wall-card\"][data-wall-id=\"ui-w1\"]" },
+        { "action": "expectVisible", "as": "parent", "selector": "[data-testid=\"post-card\"][data-post-id=\"ui-p1\"]" },
+        { "action": "expectVisible", "as": "parent", "selector": "[data-testid=\"post-card\"][data-post-id=\"ui-p2\"][data-post-status=\"hidden\"]" },
+        { "action": "expectText", "as": "parent", "text": "Posted this twice by mistake.", "selector": "[data-testid=\"post-list\"]" },
+        { "action": "expectCount", "as": "parent", "selector": "[data-testid=\"post-card\"]", "count": 3 },
+        { "action": "expectCount", "as": "parent", "selector": "[data-testid=\"post-moderate\"]", "count": 3 },
+        { "action": "expectVisible", "as": "parent", "selector": "[data-testid=\"wall-settings\"]" }
+      ]
+    }
+  ]
+}

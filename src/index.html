@@ -618,7 +618,7 @@ async function revokeShare(id, wallId) {
 function renderWallCard(wall) {
   const count = Number(wall.post_count ?? 0);
   return `
-    <article class="card card-link" data-open-wall="${esc(wall.id)}">
+    <article class="card card-link" data-open-wall="${esc(wall.id)}" data-testid="wall-card" data-wall-id="${esc(wall.id)}">
       <div class="item-head">
         <div>
           <div class="item-title">${esc(wall.title)}</div>
@@ -663,7 +663,7 @@ function renderPost(post) {
   const photos = parseIds(post.file_ids);
   const hidden = post.status !== "published";
   return `
-    <article class="card ${hidden ? "post-hidden" : ""}">
+    <article class="card ${hidden ? "post-hidden" : ""}" data-testid="post-card" data-post-id="${esc(post.id)}" data-post-status="${esc(post.status)}">
       <div class="post-head">
         <div>
           <span class="item-title">${esc(postAuthor(post))}</span>
@@ -678,10 +678,10 @@ function renderPost(post) {
       ${canEditPost(post) ? `
         <div class="row" style="margin-top:8px">
           ${canModerate() ? `
-            <button class="btn-quiet" data-post-status="${esc(post.id)}" data-status="${hidden ? "published" : "hidden"}">
+            <button class="btn-quiet" data-post-status="${esc(post.id)}" data-status="${hidden ? "published" : "hidden"}" data-testid="post-moderate" data-post-id="${esc(post.id)}">
               ${hidden ? "Show on the wall" : "Hide from the wall"}
             </button>` : ""}
-          <button class="btn-quiet btn-quiet-danger" data-delete-post="${esc(post.id)}">Delete</button>
+          <button class="btn-quiet btn-quiet-danger" data-delete-post="${esc(post.id)}" data-testid="post-delete" data-post-id="${esc(post.id)}">Delete</button>
         </div>` : ""}
     </article>`;
 }
@@ -743,7 +743,7 @@ function renderWall() {
       </div>
       <div class="row">
         ${share.enabled && canManageWalls() ? `<button class="btn btn-ghost btn-sm" data-share="${esc(wall.id)}">🔗 Share</button>` : ""}
-        ${canManageWalls() ? `<button class="btn btn-ghost btn-sm" data-settings>Settings</button>` : ""}
+        ${canManageWalls() ? `<button class="btn btn-ghost btn-sm" data-settings data-testid="wall-settings">Settings</button>` : ""}
       </div>
     </div>
     ${error ? `<div class="error">${esc(error)}</div>` : ""}
@@ -752,7 +752,7 @@ function renderWall() {
     ${renderComposer(wall)}
     ${posts.length ? `<input id="post-search" class="search-input" type="search"
       placeholder="Search messages…" aria-label="Search messages" value="${esc(postQ)}" />` : ""}
-    <section id="post-list" class="stack">${renderPostCards()}</section>`;
+    <section id="post-list" class="stack" data-testid="post-list">${renderPostCards()}</section>`;
 }
 
 function renderSettings() {
@@ -854,7 +854,7 @@ function render() {
           <p class="muted tiny">Collect everyone's messages and photos for an occasion.</p>
         </div>
         <div class="row">
-          ${canManageWalls() ? `<button class="btn btn-sm" data-new-wall>New wall</button>` : ""}
+          ${canManageWalls() ? `<button class="btn btn-sm" data-new-wall data-testid="new-wall">New wall</button>` : ""}
           <button class="btn btn-ghost btn-sm" type="button" data-refresh>Refresh</button>
         </div>
       </div>
