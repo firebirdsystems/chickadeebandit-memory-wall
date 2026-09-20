@@ -1,5 +1,7 @@
 # Memory Wall
 
+A [Chickadee Bandit](https://chickadeebandit.com/app-library/memory-wall) app.
+
 Open a wall for an occasion — a birthday, a farewell, a new arrival — and collect everyone's messages and photos in one place. Share a link and guests can read it, or add to it, without an account.
 
 ## Model
