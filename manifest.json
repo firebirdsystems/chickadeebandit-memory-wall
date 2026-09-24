@@ -76,7 +76,7 @@
       "description": "Open a wall for a date another app already knows about — a birthday on the calendar, a farewell, a new arrival. Only the wall itself is created; every message on it is still written by a person.",
       "params": {
         "title": { "type": "text", "label": "Wall title", "required": true },
-        "occasion_date": { "type": "text", "label": "Occasion date (yyyy-mm-dd)", "default": "" },
+        "occasion_date": { "type": "text", "format": "date", "label": "Occasion date (yyyy-mm-dd)", "default": "" },
         "description": { "type": "text", "label": "About this wall", "default": "" }
       },
       "dedupe": { "table": "walls", "column": "source_event_id" },
