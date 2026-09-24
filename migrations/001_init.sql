@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS app_memory_wall__walls (
 );
 
 -- One message on a wall. Members post through the app; external guests post
--- through a premium writable share link, which inserts here directly (source
+-- through a writable share link, which inserts here directly (source
 -- 'external', member_id NULL).
 CREATE TABLE IF NOT EXISTS app_memory_wall__posts (
   id          TEXT PRIMARY KEY,

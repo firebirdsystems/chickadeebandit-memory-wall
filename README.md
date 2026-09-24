@@ -21,7 +21,7 @@ Moderation is the fourth: flipping a post to `status = 'hidden'` removes it from
 
 ## Sharing
 
-Read-only sharing is free. The premium `sharing` capability unlocks guest messages (`shareable.submit`), password-protected links, and 1-year expiry. Those controls appear in the Share modal only for entitled households; there is no in-app upsell.
+Read-only sharing is always available. The `sharing` capability (included with every live plan) unlocks guest messages (`shareable.submit`), password-protected links, and 1-year expiry. Those controls appear in the Share modal only for entitled households; there is no in-app upsell.
 
 Guest messages are Turnstile-gated, rate-limited per link and per IP, capped at 200 per link, and land as `source = 'external'` with `member_id` NULL so they are always distinguishable from a member's post.
 

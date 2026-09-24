@@ -543,9 +543,9 @@ async function openShareModal(wallId) {
       <button class="btn btn-ghost btn-sm" data-share-revoke="${esc(l.id)}" data-wall-id="${esc(wallId)}">Revoke</button>
     </div>`).join("");
 
-  // Premium (`sharing`) controls: guest messages, password, 1-year expiry.
+  // `sharing` controls: guest messages, password, 1-year expiry.
   // Shown only to entitled households — no in-app upsell.
-  const premiumControls = shareEntitled ? `
+  const sharingControls = shareEntitled ? `
     <label class="check" style="margin-top:10px">
       <input type="checkbox" id="share-writable" /> Let guests add their own messages
     </label>
@@ -563,7 +563,7 @@ async function openShareModal(wallId) {
       ${esc(privacyNote)} No account needed, and links expire automatically.
     </p>
     ${rows || `<p class="tiny muted" style="padding:8px 0">No active links yet.</p>`}
-    ${premiumControls}
+    ${sharingControls}
     <div class="row" style="margin-top:14px">
       <select id="share-expiry" class="tiny" style="width:auto">
         ${SHARE_EXPIRY_CHOICES.map(({ hours, label }) =>
