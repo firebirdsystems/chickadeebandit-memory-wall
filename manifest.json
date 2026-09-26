@@ -131,6 +131,7 @@
     ]
   },
 
+  "alert_on": ["memory-wall.post_submitted"],
   "shareable": {
     "wall": {
       "table": "walls",
