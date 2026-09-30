@@ -195,6 +195,67 @@
           "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "p2", "wall_id": "w2" }] }
         }
       ]
+    },
+    {
+      "name": "in a shared space a participant adult cannot edit or remove another member's post; only the steward moderates others' posts",
+      "context": "shared_space",
+      "members": { "a": "adult", "b": "adult", "steward": "admin" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_memory_wall__walls (id, title, status, post_visibility, created_by, created_at) VALUES ('w1', 'Farewell Sam', 'open', 'everyone', ?, '2026-01-01T00:00:00Z')",
+          "params": ["{{steward}}"]
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_memory_wall__posts (id, wall_id, member_id, body, source, status, visibility, created_at) VALUES ('pa', 'w1', ?, 'We will miss you', 'member', 'published', 'everyone', '2026-01-02T00:00:00Z'), ('pb', 'w1', ?, 'Good luck Sam', 'member', 'published', 'everyone', '2026-01-02T00:00:01Z')",
+          "params": ["{{a}}", "{{b}}"]
+        },
+        {
+          "action": "db",
+          "as": "b",
+          "sql": "UPDATE app_memory_wall__posts SET body = 'defaced' WHERE id = 'pa'",
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "b",
+          "sql": "DELETE FROM app_memory_wall__posts WHERE id = 'pa'",
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "a",
+          "sql": "SELECT id, body, status FROM app_memory_wall__posts WHERE id = 'pa'",
+          "expect": {
+            "status": 200,
+            "rowCount": 1,
+            "rowsContain": [{ "id": "pa", "body": "We will miss you", "status": "published" }]
+          }
+        },
+        {
+          "action": "db",
+          "as": "steward",
+          "sql": "UPDATE app_memory_wall__posts SET status = 'hidden' WHERE id = 'pa'",
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "steward",
+          "sql": "DELETE FROM app_memory_wall__posts WHERE id = 'pb'",
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "steward",
+          "sql": "SELECT id, body, status FROM app_memory_wall__posts ORDER BY id",
+          "expect": {
+            "status": 200,
+            "rowCount": 1,
+            "rowsContain": [{ "id": "pa", "body": "We will miss you", "status": "hidden" }]
+          }
+        }
+      ]
     }
   ]
 }
