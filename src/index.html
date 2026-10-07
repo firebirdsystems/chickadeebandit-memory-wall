@@ -123,7 +123,7 @@
 </div>
 
 <script type="module">
-import { esc, isAdult, hubConfirm, hubAlert, createFilesHelper, createShareHelper, searchMatch, hubToday, activeShareLinks, SHARE_EXPIRY_CHOICES, DEFAULT_SHARE_EXPIRY_HOURS } from "/hub-sdk.js";
+import { esc, isAdult, hubConfirm, hubAlert, createFilesHelper, createShareHelper, searchMatch, hubToday, activeShareLinks, SHARE_EXPIRY_CHOICES, DEFAULT_SHARE_EXPIRY_HOURS, glyph } from "/hub-sdk.js";
 import {
   parseIds, isGuestPost, canPostTo, formatDate, formatWhen,
   memberName as memberNameOf, wallById as wallByIdOf, postAuthor as postAuthorOf,
@@ -535,8 +535,8 @@ async function openShareModal(wallId) {
         <input readonly value="${esc(l.url)}" onclick="this.select()" class="tiny" />
         <div class="tiny muted" style="margin-top:3px">
           Expires ${formatDate(l.expiresAt)} · ${l.viewCount} view${l.viewCount === 1 ? "" : "s"}${
-            l.writable ? ` · ${l.submissionCount} guest message${l.submissionCount === 1 ? "" : "s"} · ✍️ collects messages` : ""}${
-            l.hasPassword ? " · 🔒 password" : ""}
+            l.writable ? ` · ${l.submissionCount} guest message${l.submissionCount === 1 ? "" : "s"} · ${glyph("pencil")} collects messages` : ""}${
+            l.hasPassword ? ` · ${glyph("lock")} password` : ""}
         </div>
       </div>
       <button class="btn btn-ghost btn-sm" data-share-copy="${esc(l.id)}">Copy</button>
@@ -622,7 +622,7 @@ function renderWallCard(wall) {
           <div class="item-title">${esc(wall.title)}</div>
           ${wall.occasion_date ? `<div class="item-meta">${esc(formatDate(wall.occasion_date))}</div>` : ""}
           <div class="item-meta tiny">
-            ${count} message${count === 1 ? "" : "s"}${wall.post_visibility === "organizers" ? " · 🔒 not shown to visitors" : ""}
+            ${count} message${count === 1 ? "" : "s"}${wall.post_visibility === "organizers" ? ` · ${glyph("lock")} not shown to visitors` : ""}
           </div>
         </div>
         ${wall.status === "closed" ? `<span class="badge">Closed</span>` : ""}
@@ -666,7 +666,7 @@ function renderPost(post) {
         <div>
           <span class="item-title">${esc(postAuthor(post))}</span>
           ${isGuestPost(post) ? `<span class="badge" style="margin-left:6px">Guest</span>` : ""}
-          ${post.visibility === "private" ? `<span class="badge" style="margin-left:6px">🔒 Private</span>` : ""}
+          ${post.visibility === "private" ? `<span class="badge" style="margin-left:6px">${glyph("lock")} Private</span>` : ""}
           ${hidden ? `<span class="badge" style="margin-left:6px">Hidden</span>` : ""}
         </div>
         <span class="tiny muted">${esc(formatWhen(post.created_at))}</span>
@@ -736,11 +736,11 @@ function renderWall() {
         <h1>${esc(wall.title)}</h1>
         <p class="muted tiny">
           ${wall.occasion_date ? esc(formatDate(wall.occasion_date)) : ""}
-          ${wall.post_visibility === "organizers" ? " · 🔒 messages hidden from visitors" : ""}
+          ${wall.post_visibility === "organizers" ? ` · ${glyph("lock")} messages hidden from visitors` : ""}
         </p>
       </div>
       <div class="row">
-        ${share.enabled && canManageWalls() ? `<button class="btn btn-ghost btn-sm" data-share="${esc(wall.id)}">🔗 Share</button>` : ""}
+        ${share.enabled && canManageWalls() ? `<button class="btn btn-ghost btn-sm" data-share="${esc(wall.id)}">${glyph("link")} Share</button>` : ""}
         ${canManageWalls() ? `<button class="btn btn-ghost btn-sm" data-settings data-testid="wall-settings">Settings</button>` : ""}
       </div>
     </div>
