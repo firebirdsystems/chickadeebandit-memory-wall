@@ -5,6 +5,8 @@
 // importing the hub SDK's isAdult: logic.js is imported by Node in tests, where
 // "/hub-sdk.js" does not resolve. index.html supplies the flag from the SDK.
 
+const FILE_ID = /^[0-9a-f-]{36}$/;
+
 /** Hub file ids are UUIDs. Any member can write a file-id column with raw SQL,
  *  so the shape is checked exactly as the hub checks it before projecting a
  *  share page — a crafted id must never reach a URL the app builds. */
@@ -12,8 +14,43 @@ export function parseIds(raw) {
   try {
     const parsed = JSON.parse(raw ?? "[]");
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(v => typeof v === "string" && /^[0-9a-f-]{36}$/.test(v));
+    return parsed.filter(v => typeof v === "string" && FILE_ID.test(v));
   } catch { return []; }
+}
+
+/** A post's `photo_thumbs`: photo id -> the id of its small copy. Arrives as
+ *  the stored JSON text (or already parsed); anything else reads as no small
+ *  copies at all. Both sides are held to the file-id shape for the same reason
+ *  parseIds is — a small copy's id reaches a URL too. */
+export function parseThumbs(raw) {
+  let parsed = raw;
+  if (typeof raw === "string") {
+    try { parsed = JSON.parse(raw); } catch { return {}; }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const thumbs = {};
+  for (const [photoId, thumbId] of Object.entries(parsed)) {
+    if (FILE_ID.test(photoId) && typeof thumbId === "string" && FILE_ID.test(thumbId)) thumbs[photoId] = thumbId;
+  }
+  return thumbs;
+}
+
+/** The file to draw in a tile: the photo's small copy when it has one, else
+ *  the photo itself (an older post, a photo already small, a format the
+ *  browser could not draw). */
+export function tilePhotoId(photoId, thumbs) {
+  return (Object.hasOwn(thumbs ?? {}, photoId) && thumbs[photoId]) || photoId;
+}
+
+/** The map to store beside `file_ids`, built from the composer's photos
+ *  ({ id, thumbnailId }). Only photos still in the list get an entry, so one
+ *  removed before posting takes its small copy's id with it. */
+export function thumbsFor(photos) {
+  const thumbs = {};
+  for (const photo of photos ?? []) {
+    if (photo?.id && typeof photo.thumbnailId === "string" && photo.thumbnailId) thumbs[photo.id] = photo.thumbnailId;
+  }
+  return thumbs;
 }
 
 export function memberName(members, id) {
@@ -29,16 +66,38 @@ export function canManageWalls(isAdultMember) {
   return !!isAdultMember;
 }
 
-/** Moderation (hide/show any post) mirrors the `posts` row policy's adult lane. */
+/** Who is shown the posts taken off the wall: reading `posts` by its adult
+ *  visibility tier is open to any adult, in a household or a shared space. */
 export function canModerate(isAdultMember) {
   return !!isAdultMember;
 }
 
-/** Mirrors the `posts` row policy exactly (owner_or_visibility: adults write any
- *  row, everyone else only their own) — a cosmetic gate that disagrees with the
- *  hub just shows buttons that 403. */
-export function canEditPost(post, { isAdultMember, memberId } = {}) {
-  return canModerate(isAdultMember) || !!(post?.member_id && post.member_id === memberId);
+/** Whether a member may write a post someone else left. Mirrors the hub's rule
+ *  for `posts` (owner_or_visibility): any adult in a household, and only the
+ *  steward in a shared space. An adult who merely takes part in a space has
+ *  their statement narrowed to their own posts, so it would change nothing. */
+export function supervisesPosts(isAdultMember, { tenantKind = "household", isAdmin = false } = {}) {
+  return tenantKind === "household" ? !!isAdultMember : isAdmin === true;
+}
+
+/** Who may delete a post: its author, and whoever supervises posts — a
+ *  cosmetic gate that disagrees with the hub just shows buttons that fail. */
+export function canEditPost(post, { isAdultMember, memberId, tenant } = {}) {
+  return supervisesPosts(isAdultMember, tenant) || !!(post?.member_id && post.member_id === memberId);
+}
+
+/** Who may hide a post or show it again. `status` is writable by adults only
+ *  (column_write_acls), and the row itself must be one the member may write. */
+export function canHidePost(post, { isAdultMember, memberId, tenant } = {}) {
+  return !!isAdultMember && canEditPost(post, { isAdultMember, memberId, tenant });
+}
+
+/** Deleting a wall takes every post on it. The app first deletes the posts so
+ *  their photos are reclaimed, and that statement reaches other members' posts
+ *  only for whoever supervises posts; for anyone else the wall's cascade would
+ *  drop those rows and leave their photos behind. */
+export function canDeleteWall(isAdultMember, tenant) {
+  return canManageWalls(isAdultMember) && supervisesPosts(isAdultMember, tenant);
 }
 
 /** A post is genuinely external only when it has no member id — the hub forces
@@ -56,6 +115,16 @@ export function postAuthor(post, members) {
   return post?.author_name || "A guest";
 }
 
+/** The `closed_at` to store with a wall's status. It is the share link's
+ *  `submit.until_column`: the hub refuses a guest message once it has passed,
+ *  which is the only thing that makes "closed" hold for a writable link (the
+ *  link itself keeps resolving for open and closed walls alike). An open wall
+ *  has none; a wall that is already closed keeps the time it closed. */
+export function closedAtFor(status, wall, now) {
+  if (status === "open") return null;
+  return wall?.closed_at || now;
+}
+
 /** Only an open wall takes new messages; closed walls stay readable. */
 export function canPostTo(wall) {
   return wall?.status === "open";
@@ -66,6 +135,26 @@ export function canPostTo(wall) {
  *  posts before this runs). */
 export function visiblePosts(posts, isAdultMember) {
   return posts.filter(p => p.status === "published" || canModerate(isAdultMember));
+}
+
+/** Taking a post off the wall. `status` alone is only a label the page reads;
+ *  making the row private as well is what stops the hub handing it to children
+ *  (posts are read by visibility). What it was is kept so showing it again
+ *  puts it back. */
+export function hidePatch(post) {
+  return { status: "hidden", visibility: "private", hidden_visibility: statedVisibility(post) };
+}
+
+/** Putting a hidden post back, at the visibility its author chose. */
+export function showPatch(post) {
+  return { status: "published", visibility: statedVisibility(post), hidden_visibility: null };
+}
+
+/** The visibility a post's author chose: for a hidden post that is the one
+ *  set aside when it was hidden, not the "private" it is held at meanwhile. */
+export function statedVisibility(post) {
+  const kept = post?.status === "hidden" ? post?.hidden_visibility : null;
+  return kept === "everyone" || kept === "private" ? kept : post?.visibility;
 }
 
 /** A YYYY-MM-DD occasion date is household-local and has no time: pin it to

@@ -51,7 +51,8 @@
     "post_visibility",
     "author_name",
     "body",
-    "source"
+    "source",
+    "hidden_visibility"
   ],
 
   "row_policies": {
@@ -175,6 +176,7 @@
           "visibility": "everyone"
         },
         "max_submissions": 200,
+        "until_column": "closed_at",
         "event": "memory-wall.post_submitted"
       }
     }

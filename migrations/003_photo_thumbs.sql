@@ -1,0 +1,18 @@
+-- Small copies of a post's photos, for the strip of tiles on the wall.
+--
+-- A JSON object mapping a photo's file id (one of the ids in `file_ids`) to the
+-- file id of its small copy: {"<photo id>": "<small copy id>"}. A photo with no
+-- small copy has no entry, and the wall draws the photo itself. Rows from
+-- before this column hold '{}' and draw every photo that way.
+--
+-- Not a declared file column, on purpose. A small copy belongs to its photo:
+-- when a photo's id leaves `file_ids` (the post is deleted), the hub deletes
+-- the photo and every file made from it. So the map needs no reclaim of its
+-- own, and a stale entry is harmless — the map is only ever looked up by an id
+-- that is still in `file_ids`.
+--
+-- A migration runs OUTSIDE the app-db codec, so the '{}' default lands as
+-- plaintext in an encrypted column. That is safe: the codec passes through a
+-- value that is not one of its envelopes, exactly as it does for '[]' in
+-- `file_ids`.
+ALTER TABLE app_memory_wall__posts ADD COLUMN photo_thumbs TEXT NOT NULL DEFAULT '{}';

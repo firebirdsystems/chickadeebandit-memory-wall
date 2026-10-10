@@ -114,6 +114,8 @@
       margin-bottom: 10px;
     }
     .search-input:focus { outline: none; border-color: var(--accent, #6366f1); }
+    .archived { margin-top: 14px; }
+    .archived summary { cursor: pointer; color: var(--muted); font-size: .82rem; font-weight: 700; margin-bottom: 8px; }
   </style>
   <base href="/run/memory-wall/">
 </head>
@@ -125,10 +127,11 @@
 <script type="module">
 import { esc, isAdult, hubConfirm, hubAlert, createFilesHelper, createShareHelper, searchMatch, hubToday, activeShareLinks, SHARE_EXPIRY_CHOICES, DEFAULT_SHARE_EXPIRY_HOURS, glyph } from "/hub-sdk.js";
 import {
-  parseIds, isGuestPost, canPostTo, formatDate, formatWhen,
+  parseIds, parseThumbs, tilePhotoId, thumbsFor, isGuestPost, canPostTo, formatDate, formatWhen,
   memberName as memberNameOf, wallById as wallByIdOf, postAuthor as postAuthorOf,
-  canManageWalls as canManageWallsOf, canModerate as canModerateOf,
-  canEditPost as canEditPostOf, visiblePosts as visiblePostsOf,
+  canManageWalls as canManageWallsOf,
+  canEditPost as canEditPostOf, canHidePost as canHidePostOf, canDeleteWall as canDeleteWallOf,
+  visiblePosts as visiblePostsOf, hidePatch, showPatch, statedVisibility, closedAtFor,
   searchableFields, postSearchableFields,
 } from "./logic.js";
 
@@ -137,6 +140,11 @@ const CONTEXT = window.__CONTEXT_URL ?? "";
 const DB = window.__DB_URL ?? "";
 const FILES_URL = window.__FILES_URL ?? "";
 const HUB_MEMBER = window.__CURRENT_MEMBER ?? null;
+const TENANT = {
+  tenantKind: window.__TENANT_KIND ?? "household",
+  spaceKind: window.__SPACE_KIND ?? null,
+  isAdmin: window.__IS_ADMIN === true,
+};
 const LIMITS = window.__RESOURCE_LIMITS ?? {};
 
 const files = createFilesHelper(FILES_URL);
@@ -153,6 +161,7 @@ const MAX_PHOTOS_PER_POST = 12;
 let members = [];
 let currentMember = null;
 let walls = [];
+let archivedWalls = [];      // loaded only for whoever manages walls
 let posts = [];              // posts of the open wall only
 let openWallId = null;
 let view = "list";           // list | wall | new-wall | settings
@@ -160,7 +169,7 @@ let wallQ = "";              // walls-list search (see logic.js searchableFields
 let postQ = "";              // in-wall message search (postSearchableFields)
 let error = "";
 let notice = "";
-let pendingPhotos = [];      // { id, url, name } uploaded but not yet attached to a post
+let pendingPhotos = [];      // { id, thumbnailId, url, name } uploaded but not yet attached to a post
 let uploading = false;
 let shareModalEl = null;
 let shareLinks = [];
@@ -173,11 +182,14 @@ function nowIso() { return new Date().toISOString(); }
 function memberName(id) { return memberNameOf(members, id); }
 function wallById(id) { return wallByIdOf(walls, id); }
 function postAuthor(post) { return postAuthorOf(post, members); }
-function canModerate() { return canModerateOf(isAdult(currentMember)); }
 function canEditPost(post) {
-  return canEditPostOf(post, { isAdultMember: isAdult(currentMember), memberId: currentMember?.id });
+  return canEditPostOf(post, { isAdultMember: isAdult(currentMember), memberId: currentMember?.id, tenant: TENANT });
+}
+function canHidePost(post) {
+  return canHidePostOf(post, { isAdultMember: isAdult(currentMember), memberId: currentMember?.id, tenant: TENANT });
 }
 function canManageWalls() { return canManageWallsOf(isAdult(currentMember)); }
+function canDeleteWall() { return canDeleteWallOf(isAdult(currentMember), TENANT); }
 
 async function db(sql, params = []) {
   if (!DB) return { rows: [] };
@@ -235,6 +247,15 @@ async function loadWalls() {
   walls = wallRows.rows.map(w => ({ ...w, post_count: counts.get(w.id) ?? 0 }));
 }
 
+// Archived walls are off the list and off every share link, but their messages
+// and photos are still stored — so whoever manages walls can bring one back or
+// delete it for good.
+async function loadArchivedWalls() {
+  if (!DB || !canManageWalls()) { archivedWalls = []; return; }
+  const { rows } = await db("SELECT * FROM app_memory_wall__walls WHERE status = 'archived' ORDER BY created_at DESC");
+  archivedWalls = rows;
+}
+
 async function loadPosts(wallId) {
   if (!DB) {
     posts = [{
@@ -244,6 +265,7 @@ async function loadPosts(wallId) {
       author_name: "",
       body: "Happy birthday Ben! Hope the cake is enormous.",
       file_ids: "[]",
+      photo_thumbs: "{}",
       source: "member",
       status: "published",
       visibility: "everyone",
@@ -264,6 +286,7 @@ async function refresh() {
   error = "";
   try {
     await Promise.all([loadMembers(), loadWalls()]);
+    await loadArchivedWalls();
     if (openWallId) {
       if (!wallById(openWallId)) { openWallId = null; view = "list"; }
       else await loadPosts(openWallId);
@@ -321,18 +344,21 @@ async function saveWallSettings(form) {
     status: form.status.value,
     post_visibility: form.post_visibility.value,
   };
+  // Closes the share link's form with the wall (see logic.js closedAtFor).
+  patch.closed_at = closedAtFor(patch.status, wall, nowIso());
   try {
     await db(
       `UPDATE app_memory_wall__walls
-         SET title = ?, occasion_date = ?, description = ?, status = ?, post_visibility = ?
+         SET title = ?, occasion_date = ?, description = ?, status = ?, post_visibility = ?, closed_at = ?
        WHERE id = ?`,
-      [patch.title, patch.occasion_date, patch.description, patch.status, patch.post_visibility, wall.id],
+      [patch.title, patch.occasion_date, patch.description, patch.status, patch.post_visibility, patch.closed_at, wall.id],
     );
     Object.assign(wall, patch);
     // An archived wall drops out of the list query — and out of every share
     // link, since shareable.visible_where admits only open/closed.
     if (patch.status === "archived") {
       walls = walls.filter(w => w.id !== wall.id);
+      archivedWalls = [wall, ...archivedWalls];
       openWallId = null;
       view = "list";
       notice = `"${patch.title}" was archived. Its share links no longer resolve.`;
@@ -352,8 +378,14 @@ async function setCoverPhoto(input) {
   try {
     const uploaded = await uploadImage(file);
     const previous = parseIds(wall.cover_file_ids);
-    await db("UPDATE app_memory_wall__walls SET cover_file_ids = ? WHERE id = ?",
-      [JSON.stringify([uploaded.id]), wall.id]);
+    try {
+      await db("UPDATE app_memory_wall__walls SET cover_file_ids = ? WHERE id = ?",
+        [JSON.stringify([uploaded.id]), wall.id]);
+    } catch (e) {
+      // The wall never took the new cover, so nothing references the upload.
+      await files.delete(uploaded.id).catch(() => {});
+      throw e;
+    }
     wall.cover_file_ids = JSON.stringify([uploaded.id]);
     // The replaced cover is now referenced by nothing — reclaim it. (The row
     // survives the edit, so no delete_* lane covers this one.)
@@ -364,8 +396,8 @@ async function setCoverPhoto(input) {
 }
 
 async function deleteWall(id) {
-  if (!canManageWalls()) return;
-  const wall = wallById(id);
+  if (!canDeleteWall()) return;
+  const wall = wallById(id) ?? archivedWalls.find(w => w.id === id) ?? null;
   if (!await hubConfirm(`Delete "${wall?.title ?? "this wall"}"?`, {
     description: "Every message and photo on it is deleted too. This cannot be undone.",
     confirmLabel: "Delete",
@@ -378,15 +410,35 @@ async function deleteWall(id) {
     for (const fileId of parseIds(wall?.cover_file_ids)) await files.delete(fileId).catch(() => {});
     await db("DELETE FROM app_memory_wall__walls WHERE id = ?", [id]);
     walls = walls.filter(w => w.id !== id);
+    archivedWalls = archivedWalls.filter(w => w.id !== id);
     if (openWallId === id) { openWallId = null; posts = []; view = "list"; }
     error = "";
     render();
   } catch (e) { error = e.message; render(); }
 }
 
+// Restored as closed, not open: a wall may have been archived to stop guest
+// messages. Its share links resolve again once it is restored, so `closed_at`
+// is written with the status — that is what keeps a writable link's form shut
+// (see logic.js closedAtFor). Reopening is one more step, in Settings.
+async function restoreWall(id) {
+  const wall = archivedWalls.find(w => w.id === id);
+  if (!wall || !canManageWalls()) return;
+  try {
+    const { changed } = await db(
+      "UPDATE app_memory_wall__walls SET status = 'closed', closed_at = ? WHERE id = ? AND status = 'archived'",
+      [closedAtFor("closed", wall, nowIso()), id]);
+    if (changed === 0) throw new Error("This wall could not be restored.");
+    notice = `"${wall.title}" is back, closed to new messages. Open it in its settings to take more.`;
+    await refresh();
+  } catch (e) { error = e.message; render(); }
+}
+
 // --- Photos ------------------------------------------------------------------
 
-async function uploadImage(file) {
+// `thumbnail` asks the hub to keep a small copy with the photo. Only a post's
+// photos want one: the cover is drawn as a banner, from the photo itself.
+async function uploadImage(file, { thumbnail = false } = {}) {
   if (!IMAGE_TYPES.includes(file.type)) {
     throw new Error(`${file.name} isn't an image the hub accepts (JPEG, PNG, WebP, GIF or HEIC).`);
   }
@@ -394,7 +446,7 @@ async function uploadImage(file) {
   if (file.size > max) {
     throw new Error(`${file.name} is larger than the ${Math.round(max / (1024 * 1024))} MB limit.`);
   }
-  return files.upload(file);
+  return files.upload(file, { thumbnail });
 }
 
 async function addPendingPhotos(input) {
@@ -410,10 +462,13 @@ async function addPendingPhotos(input) {
   render();
   try {
     for (const file of chosen) {
-      const { id } = await uploadImage(file);
+      // thumbnailId is missing when no small copy was kept (a photo already
+      // small, a format this browser cannot draw) — the tile then draws the photo.
+      const { id, thumbnailId } = await uploadImage(file, { thumbnail: true });
       // Uploaded before the post row exists, so a cancelled composer has to
-      // reclaim them — see discardPendingPhotos.
-      pendingPhotos.push({ id, name: file.name, url: files.url(id) });
+      // reclaim them — see discardPendingPhotos. Deleting a photo deletes its
+      // small copy with it.
+      pendingPhotos.push({ id, thumbnailId, name: file.name, url: files.url(id) });
     }
   } catch (e) {
     error = e.message;
@@ -455,6 +510,8 @@ async function createPost(form) {
     author_name: currentMember.name ?? "",
     body,
     file_ids: JSON.stringify(pendingPhotos.map(p => p.id)),
+    // Always written with file_ids: each photo's small copy, keyed by the photo.
+    photo_thumbs: JSON.stringify(thumbsFor(pendingPhotos)),
     source: "member",
     status: "published",
     visibility: form.private.checked ? "private" : "everyone",
@@ -463,9 +520,9 @@ async function createPost(form) {
   try {
     await db(
       `INSERT INTO app_memory_wall__posts
-         (id, wall_id, member_id, author_name, body, file_ids, source, status, visibility, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [post.id, post.wall_id, post.member_id, post.author_name, post.body, post.file_ids,
+         (id, wall_id, member_id, author_name, body, file_ids, photo_thumbs, source, status, visibility, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [post.id, post.wall_id, post.member_id, post.author_name, post.body, post.file_ids, post.photo_thumbs,
        post.source, post.status, post.visibility, post.created_at],
     );
     posts = [post, ...posts];
@@ -477,11 +534,19 @@ async function createPost(form) {
 }
 
 async function setPostStatus(id, status) {
-  if (!canModerate()) return;
+  const post = posts.find(p => p.id === id);
+  if (!post || !canHidePost(post)) return;
   try {
-    await db("UPDATE app_memory_wall__posts SET status = ? WHERE id = ?", [status, id]);
-    const post = posts.find(p => p.id === id);
-    if (post) post.status = status;
+    // Hiding also makes the row private, so the hub stops handing it to
+    // children at all; showing it again puts back what it was (logic.js).
+    const patch = status === "hidden" ? hidePatch(post) : showPatch(post);
+    // The row policy narrows this to posts the member may write, so a refused
+    // change answers 200 with nothing changed; the post keeps its status here.
+    const { changed } = await db(
+      "UPDATE app_memory_wall__posts SET status = ?, visibility = ?, hidden_visibility = ? WHERE id = ?",
+      [patch.status, patch.visibility, patch.hidden_visibility, id]);
+    if (changed === 0) throw new Error("This message could not be changed.");
+    Object.assign(post, patch);
     error = "";
     render();
   } catch (e) { error = e.message; render(); }
@@ -498,7 +563,8 @@ async function deletePost(id) {
     // Single-statement DELETE on purpose: delete_file_list_columns reclaims
     // file_ids from this row, and the batch form refuses a declared table
     // rather than skipping the reclaim.
-    await db("DELETE FROM app_memory_wall__posts WHERE id = ?", [id]);
+    const { changed } = await db("DELETE FROM app_memory_wall__posts WHERE id = ?", [id]);
+    if (changed === 0) throw new Error("This message could not be deleted.");
     posts = posts.filter(p => p.id !== id);
     error = "";
     render();
@@ -524,7 +590,9 @@ function openShareBackdrop(html) {
 async function openShareModal(wallId) {
   const wall = wallById(wallId);
   if (!wall) return;
-  const status = await share.listAll();
+  let status;
+  try { status = await share.listAll(); }
+  catch (err) { hubAlert("Couldn't load share links", { description: err.message }); return; }
   shareLinks = status.links;
   shareEntitled = status.entitled;
   const active = activeShareLinks(shareLinks, wallId);
@@ -646,12 +714,37 @@ function renderList() {
     <div id="wall-list" class="stack">${renderWallCards()}</div>`;
 }
 
-function renderPhotoStrip(fileIds, { removable = false } = {}) {
+function renderArchived() {
+  if (!canManageWalls() || !archivedWalls.length) return "";
+  return `
+    <details class="archived" data-testid="archived-walls">
+      <summary>Archived (${archivedWalls.length})</summary>
+      <div class="stack">
+        ${archivedWalls.map(wall => `
+          <article class="card" data-testid="archived-wall" data-wall-id="${esc(wall.id)}">
+            <div class="item-head">
+              <div>
+                <div class="item-title">${esc(wall.title)}</div>
+                ${wall.occasion_date ? `<div class="item-meta">${esc(formatDate(wall.occasion_date))}</div>` : ""}
+              </div>
+              <div class="row">
+                <button class="btn btn-ghost btn-sm" data-restore-wall="${esc(wall.id)}">Restore</button>
+                ${canDeleteWall() ? `<button class="btn-quiet btn-quiet-danger" data-delete-wall="${esc(wall.id)}">Delete</button>` : ""}
+              </div>
+            </div>
+          </article>`).join("")}
+      </div>
+    </details>`;
+}
+
+// The tile draws a photo's small copy when `thumbs` (photo id -> small copy id)
+// has one; the link around it always opens the photo itself.
+function renderPhotoStrip(fileIds, { removable = false, thumbs = {} } = {}) {
   if (!fileIds.length || !FILES_URL) return "";
   return `<div class="thumbs">${fileIds.map(id => `
     <div class="thumb-wrap">
       <a href="${esc(files.url(id))}" target="_blank" rel="noreferrer">
-        <img class="thumb" src="${esc(files.url(id))}" alt="" loading="lazy" />
+        <img class="thumb" src="${esc(files.url(tilePhotoId(id, thumbs)))}" alt="" loading="lazy" />
       </a>
       ${removable ? `<button class="thumb-drop" data-drop-photo="${esc(id)}" aria-label="Remove photo">×</button>` : ""}
     </div>`).join("")}</div>`;
@@ -666,16 +759,16 @@ function renderPost(post) {
         <div>
           <span class="item-title">${esc(postAuthor(post))}</span>
           ${isGuestPost(post) ? `<span class="badge" style="margin-left:6px">Guest</span>` : ""}
-          ${post.visibility === "private" ? `<span class="badge" style="margin-left:6px">${glyph("lock")} Private</span>` : ""}
+          ${statedVisibility(post) === "private" ? `<span class="badge" style="margin-left:6px">${glyph("lock")} Private</span>` : ""}
           ${hidden ? `<span class="badge" style="margin-left:6px">Hidden</span>` : ""}
         </div>
         <span class="tiny muted">${esc(formatWhen(post.created_at))}</span>
       </div>
       ${post.body ? `<div class="post-body">${esc(post.body)}</div>` : ""}
-      ${renderPhotoStrip(photos)}
+      ${renderPhotoStrip(photos, { thumbs: parseThumbs(post.photo_thumbs) })}
       ${canEditPost(post) ? `
         <div class="row" style="margin-top:8px">
-          ${canModerate() ? `
+          ${canHidePost(post) ? `
             <button class="btn-quiet" data-post-status="${esc(post.id)}" data-status="${hidden ? "published" : "hidden"}" data-testid="post-moderate" data-post-id="${esc(post.id)}">
               ${hidden ? "Show on the wall" : "Hide from the wall"}
             </button>` : ""}
@@ -702,7 +795,7 @@ function renderComposer(wall) {
     return `<div class="notice">This wall is closed — no new messages.</div>`;
   }
   return `
-    <form class="card form" id="post-form">
+    <form class="card form" id="post-form" data-wall-id="${esc(wall.id)}">
       <div class="field">
         <label for="body">Your message</label>
         <textarea id="body" name="body" data-autofocus maxlength="4000"
@@ -712,7 +805,7 @@ function renderComposer(wall) {
         <div class="field">
           <label for="photos">Photos</label>
           <input id="photos" type="file" accept="${IMAGE_TYPES.join(",")}" multiple />
-          ${renderPhotoStrip(pendingPhotos.map(p => p.id), { removable: true })}
+          ${renderPhotoStrip(pendingPhotos.map(p => p.id), { removable: true, thumbs: thumbsFor(pendingPhotos) })}
         </div>` : ""}
       <label class="check">
         <input type="checkbox" name="private" />
@@ -807,7 +900,9 @@ function renderSettings() {
         ${renderPhotoStrip(parseIds(wall.cover_file_ids))}
       </div>` : ""}
     <div class="card">
-      <button class="btn-quiet btn-quiet-danger" data-delete-wall="${esc(wall.id)}">Delete this wall</button>
+      ${canDeleteWall()
+        ? `<button class="btn-quiet btn-quiet-danger" data-delete-wall="${esc(wall.id)}">Delete this wall</button>`
+        : `<p class="tiny muted">In a shared space, the steward deletes a wall.</p>`}
     </div>`;
 }
 
@@ -837,9 +932,26 @@ function renderNewWall() {
     </form>`;
 }
 
+// What is typed into the composer lives only in the DOM, and render() rebuilds
+// it — on every photo added or removed, among others. Carried across so neither
+// the message nor the "keep this private" tick is silently reset.
+function composerDraft() {
+  const form = document.getElementById("post-form");
+  if (!form) return null;
+  return { wallId: form.dataset.wallId, body: form.elements.body.value, isPrivate: form.elements.private.checked };
+}
+
+function restoreComposerDraft(draft) {
+  const form = document.getElementById("post-form");
+  if (!draft || !form || form.dataset.wallId !== draft.wallId) return;
+  form.elements.body.value = draft.body;
+  form.elements.private.checked = draft.isPrivate;
+}
+
 function render() {
   const root = document.getElementById("root");
   root.className = "app";
+  const draft = composerDraft();
 
   if (view === "wall") root.innerHTML = renderWall();
   else if (view === "settings") root.innerHTML = renderSettings();
@@ -858,9 +970,11 @@ function render() {
       </div>
       ${error ? `<div class="error">${esc(error)}</div>` : ""}
       ${notice ? `<div class="notice">${esc(notice)}</div>` : ""}
-      <section class="stack">${renderList()}</section>`;
+      <section class="stack">${renderList()}</section>
+      ${renderArchived()}`;
     notice = "";
   }
+  restoreComposerDraft(draft);
 
   // Programmatic focus, never the autofocus attribute — the app renders inside
   // an iframe and the attribute would steal focus from the hub around it.
@@ -907,6 +1021,7 @@ document.addEventListener("click", (event) => {
   // posted — reclaim it rather than leaving bytes nothing references.
   if (target.matches("[data-settings]")) { discardPendingPhotos(); view = "settings"; error = ""; render(); return; }
   if (target.hasAttribute("data-delete-wall")) { deleteWall(target.getAttribute("data-delete-wall")); return; }
+  if (target.hasAttribute("data-restore-wall")) { restoreWall(target.getAttribute("data-restore-wall")); return; }
   if (target.hasAttribute("data-drop-photo")) { dropPendingPhoto(target.getAttribute("data-drop-photo")); return; }
   if (target.hasAttribute("data-delete-post")) { deletePost(target.getAttribute("data-delete-post")); return; }
   if (target.hasAttribute("data-post-status")) {

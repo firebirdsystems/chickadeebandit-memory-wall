@@ -121,6 +121,60 @@
       ]
     },
     {
+      "name": "a post an adult hides stops reaching other children, and showing it again brings it back",
+      "members": { "parent": "adult", "kidA": "child", "kidB": "child" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_memory_wall__walls (id, title, status, post_visibility, created_by, created_at) VALUES ('wh', 'Farewell Sam', 'open', 'everyone', ?, '2026-01-01T00:00:00Z')",
+          "params": ["{{parent}}"]
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_memory_wall__posts (id, wall_id, member_id, body, source, status, visibility, created_at) VALUES ('ph', 'wh', ?, 'Not for the wall', 'member', 'published', 'everyone', '2026-01-02T00:00:00Z')",
+          "params": ["{{kidB}}"]
+        },
+        {
+          "action": "db",
+          "as": "kidA",
+          "sql": "SELECT id FROM app_memory_wall__posts WHERE wall_id = 'wh'",
+          "expect": { "status": 200, "rowCount": 1 }
+        },
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "UPDATE app_memory_wall__posts SET status = ?, visibility = ?, hidden_visibility = ? WHERE id = ?",
+          "params": ["hidden", "private", "everyone", "ph"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "kidA",
+          "sql": "SELECT id FROM app_memory_wall__posts WHERE wall_id = 'wh'",
+          "expect": { "status": 200, "rowCount": 0 }
+        },
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "SELECT id, status, visibility, hidden_visibility FROM app_memory_wall__posts WHERE id = 'ph'",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "ph", "status": "hidden", "visibility": "private", "hidden_visibility": "everyone" }] }
+        },
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "UPDATE app_memory_wall__posts SET status = ?, visibility = ?, hidden_visibility = ? WHERE id = ?",
+          "params": ["published", "everyone", null, "ph"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "kidA",
+          "sql": "SELECT id FROM app_memory_wall__posts WHERE wall_id = 'wh'",
+          "expect": { "status": 200, "rowCount": 1 }
+        }
+      ]
+    },
+    {
       "name": "only adults open and manage walls, and wall status is limited to open/closed/archived",
       "members": { "parent": "adult", "kid": "child" },
       "steps": [
