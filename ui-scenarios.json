@@ -49,6 +49,207 @@
         { "action": "expectCount", "as": "parent", "selector": "[data-testid=\"post-moderate\"]", "count": 3 },
         { "action": "expectVisible", "as": "parent", "selector": "[data-testid=\"wall-settings\"]" }
       ]
+    },
+    {
+      "name": "in a shared space a participant is offered delete and hide only on their own message and no way to delete a wall; the steward is offered all of them",
+      "context": "shared_space",
+      "members": {
+        "steward": "admin",
+        "pat": "adult",
+        "sam": "adult"
+      },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_memory_wall__walls (id, title, occasion_date, status, post_visibility, created_by, created_at) VALUES ('sp-w1', ?, '2026-03-01', 'open', 'everyone', ?, '2026-01-02T00:00:00Z')",
+          "params": [
+            "Club farewell",
+            "{{steward}}"
+          ]
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_memory_wall__walls (id, title, occasion_date, status, post_visibility, created_by, created_at, closed_at) VALUES ('sp-w2', ?, '2025-06-01', 'archived', 'everyone', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+          "params": [
+            "Last year's picnic",
+            "{{steward}}"
+          ]
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_memory_wall__posts (id, wall_id, member_id, body, source, status, visibility, created_at) VALUES ('sp-p-pat', 'sp-w1', ?, ?, 'member', 'published', 'everyone', '2026-01-03T00:00:00Z')",
+          "params": [
+            "{{pat}}",
+            "Thanks for everything."
+          ]
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_memory_wall__posts (id, wall_id, member_id, body, source, status, visibility, created_at) VALUES ('sp-p-sam', 'sp-w1', ?, ?, 'member', 'published', 'everyone', '2026-01-04T00:00:00Z')",
+          "params": [
+            "{{sam}}",
+            "We will miss you."
+          ]
+        },
+        {
+          "action": "open",
+          "as": "pat"
+        },
+        {
+          "action": "expectVisible",
+          "as": "pat",
+          "selector": "[data-testid=\"wall-card\"][data-wall-id=\"sp-w1\"]"
+        },
+        {
+          "action": "expectVisible",
+          "as": "pat",
+          "selector": "[data-testid=\"archived-walls\"]"
+        },
+        {
+          "action": "expectCount",
+          "as": "pat",
+          "selector": "[data-testid=\"archived-wall-restore\"][data-wall-id=\"sp-w2\"]",
+          "count": 1
+        },
+        {
+          "action": "expectCount",
+          "as": "pat",
+          "selector": "[data-testid=\"archived-wall-delete\"]",
+          "count": 0
+        },
+        {
+          "action": "click",
+          "as": "pat",
+          "selector": "[data-testid=\"wall-card\"][data-wall-id=\"sp-w1\"]"
+        },
+        {
+          "action": "expectVisible",
+          "as": "pat",
+          "selector": "[data-testid=\"post-card\"][data-post-id=\"sp-p-pat\"]"
+        },
+        {
+          "action": "expectVisible",
+          "as": "pat",
+          "selector": "[data-testid=\"post-card\"][data-post-id=\"sp-p-sam\"]"
+        },
+        {
+          "action": "expectVisible",
+          "as": "pat",
+          "selector": "[data-testid=\"post-moderate\"][data-post-id=\"sp-p-pat\"]"
+        },
+        {
+          "action": "expectCount",
+          "as": "pat",
+          "selector": "[data-testid=\"post-moderate\"]",
+          "count": 1
+        },
+        {
+          "action": "expectVisible",
+          "as": "pat",
+          "selector": "[data-testid=\"post-delete\"][data-post-id=\"sp-p-pat\"]"
+        },
+        {
+          "action": "expectCount",
+          "as": "pat",
+          "selector": "[data-testid=\"post-delete\"]",
+          "count": 1
+        },
+        {
+          "action": "click",
+          "as": "pat",
+          "selector": "[data-testid=\"wall-settings\"]"
+        },
+        {
+          "action": "expectVisible",
+          "as": "pat",
+          "selector": "[data-testid=\"settings-form\"]"
+        },
+        {
+          "action": "expectCount",
+          "as": "pat",
+          "selector": "[data-testid=\"delete-wall\"]",
+          "count": 0
+        },
+        {
+          "action": "expectVisible",
+          "as": "pat",
+          "selector": "[data-testid=\"delete-wall-note\"]"
+        },
+        {
+          "action": "open",
+          "as": "steward"
+        },
+        {
+          "action": "expectVisible",
+          "as": "steward",
+          "selector": "[data-testid=\"wall-card\"][data-wall-id=\"sp-w1\"]"
+        },
+        {
+          "action": "expectVisible",
+          "as": "steward",
+          "selector": "[data-testid=\"archived-walls\"]"
+        },
+        {
+          "action": "expectCount",
+          "as": "steward",
+          "selector": "[data-testid=\"archived-wall-restore\"][data-wall-id=\"sp-w2\"]",
+          "count": 1
+        },
+        {
+          "action": "expectCount",
+          "as": "steward",
+          "selector": "[data-testid=\"archived-wall-delete\"]",
+          "count": 1
+        },
+        {
+          "action": "click",
+          "as": "steward",
+          "selector": "[data-testid=\"wall-card\"][data-wall-id=\"sp-w1\"]"
+        },
+        {
+          "action": "expectVisible",
+          "as": "steward",
+          "selector": "[data-testid=\"post-card\"][data-post-id=\"sp-p-pat\"]"
+        },
+        {
+          "action": "expectVisible",
+          "as": "steward",
+          "selector": "[data-testid=\"post-card\"][data-post-id=\"sp-p-sam\"]"
+        },
+        {
+          "action": "expectCount",
+          "as": "steward",
+          "selector": "[data-testid=\"post-moderate\"]",
+          "count": 2
+        },
+        {
+          "action": "expectCount",
+          "as": "steward",
+          "selector": "[data-testid=\"post-delete\"]",
+          "count": 2
+        },
+        {
+          "action": "click",
+          "as": "steward",
+          "selector": "[data-testid=\"wall-settings\"]"
+        },
+        {
+          "action": "expectVisible",
+          "as": "steward",
+          "selector": "[data-testid=\"settings-form\"]"
+        },
+        {
+          "action": "expectVisible",
+          "as": "steward",
+          "selector": "[data-testid=\"delete-wall\"]"
+        },
+        {
+          "action": "expectCount",
+          "as": "steward",
+          "selector": "[data-testid=\"delete-wall-note\"]",
+          "count": 0
+        }
+      ]
     }
   ]
 }

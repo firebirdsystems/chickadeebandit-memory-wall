@@ -83,6 +83,8 @@
     input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
     .empty, .loading { color: var(--muted); text-align: center; padding: 28px 16px; }
     .error { background: var(--red-soft); color: var(--red); padding: 9px 12px; border-radius: 8px; margin-bottom: 10px; font-size: .86rem; }
+    .load-error { margin: 0 0 12px; padding: 10px 14px; border-radius: 10px; background: var(--hub-tint-danger, #fee2e2); color: var(--hub-tint-danger-fg, #b91c1c); font-size: 0.9rem; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+    .load-error-retry { background: none; border: 1px solid currentColor; border-radius: 8px; padding: 5px 10px; font: inherit; font-weight: 600; color: inherit; cursor: pointer; flex-shrink: 0; }
     .notice { background: var(--bg); color: var(--muted); padding: 9px 12px; border-radius: 8px; margin-bottom: 10px; font-size: .82rem; border: 1px solid var(--border); }
     .thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
     .thumb {
@@ -168,6 +170,7 @@ let view = "list";           // list | wall | new-wall | settings
 let wallQ = "";              // walls-list search (see logic.js searchableFields)
 let postQ = "";              // in-wall message search (postSearchableFields)
 let error = "";
+let loadFailed = false;      // a load failed; cleared when one succeeds
 let notice = "";
 let pendingPhotos = [];      // { id, thumbnailId, url, name } uploaded but not yet attached to a post
 let uploading = false;
@@ -198,8 +201,8 @@ async function db(sql, params = []) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sql, params }),
   });
-  const json = await res.json();
-  if (json.error) throw new Error(json.error);
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json || typeof json !== "object" || json.error) throw new Error(json?.error || "Couldn’t reach the hub. Try again.");
   return json;
 }
 
@@ -211,8 +214,13 @@ async function loadMembers() {
       { id: "demo-3", name: "Casey", role: "child" },
     ];
   } else {
+    // A roster that cannot be read is a failed load, not an empty household.
     const res = await fetch(`${CONTEXT}?keys=family.members`);
-    members = ((await res.json())["family.members"]) ?? [];
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json || typeof json !== "object") throw new Error("Couldn’t reach the hub. Try again.");
+    // A 200 that names the roster in `$errors` is the hub failing to read it.
+    if (Array.isArray(json.$errors) && json.$errors.includes("family.members")) throw new Error("Couldn’t reach the hub. Try again.");
+    members = json["family.members"] ?? [];
   }
   currentMember = HUB_MEMBER ?? members[0] ?? { id: "guest", name: "Guest", role: "adult" };
 }
@@ -291,9 +299,12 @@ async function refresh() {
       if (!wallById(openWallId)) { openWallId = null; view = "list"; }
       else await loadPosts(openWallId);
     }
+    loadFailed = false;
     render();
   } catch (e) {
-    error = e.message;
+    // The list shows the banner; an open wall keeps its own message.
+    loadFailed = true;
+    if (view !== "list") error = e.message;
     render();
   }
 }
@@ -408,7 +419,8 @@ async function deleteWall(id) {
     // can only drop rows. Deleting the parent alone would strand the photos.
     await db("DELETE FROM app_memory_wall__posts WHERE wall_id = ?", [id]);
     for (const fileId of parseIds(wall?.cover_file_ids)) await files.delete(fileId).catch(() => {});
-    await db("DELETE FROM app_memory_wall__walls WHERE id = ?", [id]);
+    const { changed } = await db("DELETE FROM app_memory_wall__walls WHERE id = ?", [id]);
+    if (changed === 0) throw new Error("This wall could not be deleted.");
     walls = walls.filter(w => w.id !== id);
     archivedWalls = archivedWalls.filter(w => w.id !== id);
     if (openWallId === id) { openWallId = null; posts = []; view = "list"; }
@@ -704,6 +716,7 @@ function renderWallCards() {
   const shown = wallQ ? walls.filter(w => searchMatch(wallQ, searchableFields(w))) : walls;
   if (shown.length) return shown.map(renderWallCard).join("");
   if (wallQ) return `<div class="card empty">No walls match "${esc(wallQ)}".</div>`;
+  if (loadFailed) return "";
   return `<div class="card empty">No walls yet.${canManageWalls() ? " Open one for the next occasion." : ""}</div>`;
 }
 
@@ -728,8 +741,8 @@ function renderArchived() {
                 ${wall.occasion_date ? `<div class="item-meta">${esc(formatDate(wall.occasion_date))}</div>` : ""}
               </div>
               <div class="row">
-                <button class="btn btn-ghost btn-sm" data-restore-wall="${esc(wall.id)}">Restore</button>
-                ${canDeleteWall() ? `<button class="btn-quiet btn-quiet-danger" data-delete-wall="${esc(wall.id)}">Delete</button>` : ""}
+                <button class="btn btn-ghost btn-sm" data-restore-wall="${esc(wall.id)}" data-testid="archived-wall-restore" data-wall-id="${esc(wall.id)}">Restore</button>
+                ${canDeleteWall() ? `<button class="btn-quiet btn-quiet-danger" data-delete-wall="${esc(wall.id)}" data-testid="archived-wall-delete" data-wall-id="${esc(wall.id)}">Delete</button>` : ""}
               </div>
             </div>
           </article>`).join("")}
@@ -857,7 +870,7 @@ function renderSettings() {
       </div>
     </div>
     ${error ? `<div class="error">${esc(error)}</div>` : ""}
-    <form class="card form" id="settings-form">
+    <form class="card form" id="settings-form" data-testid="settings-form">
       <div class="field">
         <label for="s-title">Title</label>
         <input id="s-title" name="title" value="${esc(wall.title)}" required />
@@ -901,8 +914,8 @@ function renderSettings() {
       </div>` : ""}
     <div class="card">
       ${canDeleteWall()
-        ? `<button class="btn-quiet btn-quiet-danger" data-delete-wall="${esc(wall.id)}">Delete this wall</button>`
-        : `<p class="tiny muted">In a shared space, the steward deletes a wall.</p>`}
+        ? `<button class="btn-quiet btn-quiet-danger" data-delete-wall="${esc(wall.id)}" data-testid="delete-wall">Delete this wall</button>`
+        : `<p class="tiny muted" data-testid="delete-wall-note">In a shared space, the steward deletes a wall.</p>`}
     </div>`;
 }
 
@@ -964,10 +977,11 @@ function render() {
           <p class="muted tiny">Collect everyone's messages and photos for an occasion.</p>
         </div>
         <div class="row">
-          ${canManageWalls() ? `<button class="btn btn-sm" data-new-wall data-testid="new-wall">New wall</button>` : ""}
+          ${canManageWalls() && !loadFailed ? `<button class="btn btn-sm" data-new-wall data-testid="new-wall">New wall</button>` : ""}
           <button class="btn btn-ghost btn-sm" type="button" data-refresh>Refresh</button>
         </div>
       </div>
+      ${loadFailed ? `<div class="load-error" data-testid="load-error" role="alert"><span>Couldn’t load the walls.</span> <button type="button" class="load-error-retry" data-testid="load-retry">Try again</button></div>` : ""}
       ${error ? `<div class="error">${esc(error)}</div>` : ""}
       ${notice ? `<div class="notice">${esc(notice)}</div>` : ""}
       <section class="stack">${renderList()}</section>
@@ -1013,7 +1027,7 @@ document.addEventListener("click", (event) => {
     loadPosts(openId).then(render).catch((e) => { error = e.message; render(); });
     return;
   }
-  if (target.matches("[data-refresh]")) { refresh(); return; }
+  if (target.matches('[data-refresh], [data-testid="load-retry"]')) { refresh(); return; }
   if (target.matches("[data-new-wall]")) { discardPendingPhotos(); view = "new-wall"; error = ""; render(); return; }
   if (target.matches("[data-back]")) { discardPendingPhotos(); openWallId = null; postQ = ""; view = "list"; error = ""; render(); return; }
   if (target.matches("[data-back-to-wall]")) { view = "wall"; error = ""; render(); return; }
