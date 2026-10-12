@@ -311,6 +311,27 @@ async function refresh() {
 
 // --- Walls -------------------------------------------------------------------
 
+// A refused save is said inside the form it came from, with no re-render:
+// redrawing the page would throw away what was typed.
+function formFailed(form, msg) {
+  if (!form.isConnected) { error = msg; return render(); }
+  let line = form.querySelector("[data-form-error]");
+  if (!line) {
+    line = document.createElement("div");
+    line.className = "error";
+    line.setAttribute("role", "alert");
+    line.setAttribute("data-form-error", "");
+    form.querySelector('button[type="submit"]').before(line);
+  }
+  line.textContent = msg;
+}
+// One save at a time: the submit button is off while the hub is answering.
+function formBusy(form, busy) {
+  const btn = form.querySelector('button[type="submit"]');
+  if (btn) btn.disabled = busy;
+  if (busy) form.querySelector("[data-form-error]")?.remove();
+}
+
 async function createWall(form) {
   if (!canManageWalls()) { error = "Only adults can open a wall."; return render(); }
   const title = form.title.value.trim();
@@ -327,6 +348,7 @@ async function createWall(form) {
     created_by: currentMember.id,
     created_at: nowIso(),
   };
+  formBusy(form, true);
   try {
     await db(
       `INSERT INTO app_memory_wall__walls
@@ -342,7 +364,10 @@ async function createWall(form) {
     view = "wall";
     error = "";
     render();
-  } catch (e) { error = e.message; render(); }
+  } catch {
+    formBusy(form, false);
+    formFailed(form, "Couldn’t open the wall — try again.");
+  }
 }
 
 async function saveWallSettings(form) {
@@ -357,6 +382,7 @@ async function saveWallSettings(form) {
   };
   // Closes the share link's form with the wall (see logic.js closedAtFor).
   patch.closed_at = closedAtFor(patch.status, wall, nowIso());
+  formBusy(form, true);
   try {
     await db(
       `UPDATE app_memory_wall__walls
@@ -378,7 +404,10 @@ async function saveWallSettings(form) {
     }
     error = "";
     render();
-  } catch (e) { error = e.message; render(); }
+  } catch {
+    formBusy(form, false);
+    formFailed(form, "Couldn’t save the wall — try again.");
+  }
 }
 
 async function setCoverPhoto(input) {
@@ -395,7 +424,8 @@ async function setCoverPhoto(input) {
     } catch (e) {
       // The wall never took the new cover, so nothing references the upload.
       await files.delete(uploaded.id).catch(() => {});
-      throw e;
+      console.error(e);
+      throw new Error("Couldn’t save the cover photo — try again.");
     }
     wall.cover_file_ids = JSON.stringify([uploaded.id]);
     // The replaced cover is now referenced by nothing — reclaim it. (The row
@@ -413,6 +443,7 @@ async function deleteWall(id) {
     description: "Every message and photo on it is deleted too. This cannot be undone.",
     confirmLabel: "Delete",
   })) return;
+  let refused = null;
   try {
     // Posts are deleted first, on purpose: delete_file_list_columns reclaims
     // each post's photos on ITS delete, while the walls -> posts delete_cascade
@@ -420,13 +451,17 @@ async function deleteWall(id) {
     await db("DELETE FROM app_memory_wall__posts WHERE wall_id = ?", [id]);
     for (const fileId of parseIds(wall?.cover_file_ids)) await files.delete(fileId).catch(() => {});
     const { changed } = await db("DELETE FROM app_memory_wall__walls WHERE id = ?", [id]);
-    if (changed === 0) throw new Error("This wall could not be deleted.");
+    if (changed === 0) throw new Error(refused = "This wall could not be deleted.");
     walls = walls.filter(w => w.id !== id);
     archivedWalls = archivedWalls.filter(w => w.id !== id);
     if (openWallId === id) { openWallId = null; posts = []; view = "list"; }
     error = "";
     render();
-  } catch (e) { error = e.message; render(); }
+  } catch (e) {
+    if (!refused) console.error(e);
+    error = refused ?? "Couldn’t delete the wall — try again.";
+    render();
+  }
 }
 
 // Restored as closed, not open: a wall may have been archived to stop guest
@@ -436,14 +471,19 @@ async function deleteWall(id) {
 async function restoreWall(id) {
   const wall = archivedWalls.find(w => w.id === id);
   if (!wall || !canManageWalls()) return;
+  let refused = null;
   try {
     const { changed } = await db(
       "UPDATE app_memory_wall__walls SET status = 'closed', closed_at = ? WHERE id = ? AND status = 'archived'",
       [closedAtFor("closed", wall, nowIso()), id]);
-    if (changed === 0) throw new Error("This wall could not be restored.");
+    if (changed === 0) throw new Error(refused = "This wall could not be restored.");
     notice = `"${wall.title}" is back, closed to new messages. Open it in its settings to take more.`;
     await refresh();
-  } catch (e) { error = e.message; render(); }
+  } catch (e) {
+    if (!refused) console.error(e);
+    error = refused ?? "Couldn’t restore the wall — try again.";
+    render();
+  }
 }
 
 // --- Photos ------------------------------------------------------------------
@@ -529,6 +569,7 @@ async function createPost(form) {
     visibility: form.private.checked ? "private" : "everyone",
     created_at: nowIso(),
   };
+  formBusy(form, true);
   try {
     await db(
       `INSERT INTO app_memory_wall__posts
@@ -542,12 +583,18 @@ async function createPost(form) {
     form.reset();
     error = "";
     render();
-  } catch (e) { error = e.message; render(); }
+  } catch {
+    // Photos already attached are page state, so the message is all a redraw
+    // would lose — say it in the form and leave both where they are.
+    formBusy(form, false);
+    formFailed(form, "Couldn’t post your message — try again.");
+  }
 }
 
 async function setPostStatus(id, status) {
   const post = posts.find(p => p.id === id);
   if (!post || !canHidePost(post)) return;
+  let refused = null;
   try {
     // Hiding also makes the row private, so the hub stops handing it to
     // children at all; showing it again puts back what it was (logic.js).
@@ -557,11 +604,15 @@ async function setPostStatus(id, status) {
     const { changed } = await db(
       "UPDATE app_memory_wall__posts SET status = ?, visibility = ?, hidden_visibility = ? WHERE id = ?",
       [patch.status, patch.visibility, patch.hidden_visibility, id]);
-    if (changed === 0) throw new Error("This message could not be changed.");
+    if (changed === 0) throw new Error(refused = "This message could not be changed.");
     Object.assign(post, patch);
     error = "";
     render();
-  } catch (e) { error = e.message; render(); }
+  } catch (e) {
+    if (!refused) console.error(e);
+    error = refused ?? (status === "hidden" ? "Couldn’t hide the message — try again." : "Couldn’t show the message — try again.");
+    render();
+  }
 }
 
 async function deletePost(id) {
@@ -571,16 +622,21 @@ async function deletePost(id) {
     description: parseIds(post.file_ids).length ? "Its photos are deleted with it." : undefined,
     confirmLabel: "Delete",
   })) return;
+  let refused = null;
   try {
     // Single-statement DELETE on purpose: delete_file_list_columns reclaims
     // file_ids from this row, and the batch form refuses a declared table
     // rather than skipping the reclaim.
     const { changed } = await db("DELETE FROM app_memory_wall__posts WHERE id = ?", [id]);
-    if (changed === 0) throw new Error("This message could not be deleted.");
+    if (changed === 0) throw new Error(refused = "This message could not be deleted.");
     posts = posts.filter(p => p.id !== id);
     error = "";
     render();
-  } catch (e) { error = e.message; render(); }
+  } catch (e) {
+    if (!refused) console.error(e);
+    error = refused ?? "Couldn’t delete the message — try again.";
+    render();
+  }
 }
 
 // --- Share links -------------------------------------------------------------
