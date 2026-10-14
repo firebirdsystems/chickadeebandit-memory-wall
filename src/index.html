@@ -134,7 +134,7 @@ import {
   canManageWalls as canManageWallsOf,
   canEditPost as canEditPostOf, canHidePost as canHidePostOf, canDeleteWall as canDeleteWallOf,
   visiblePosts as visiblePostsOf, hidePatch, showPatch, statedVisibility, closedAtFor,
-  searchableFields, postSearchableFields,
+  searchableFields, postSearchableFields, shareFailureLine,
 } from "./logic.js";
 
 // --- Hub runtime globals (empty in demo mode) --------------------------------
@@ -655,12 +655,14 @@ function openShareBackdrop(html) {
   document.body.appendChild(shareModalEl);
 }
 
-async function openShareModal(wallId) {
+async function openShareModal(wallId, { afterWrite = false } = {}) {
   const wall = wallById(wallId);
   if (!wall) return;
   let status;
   try { status = await share.listAll(); }
-  catch (err) { hubAlert("Couldn't load share links", { description: err.message }); return; }
+  catch (err) { if (afterWrite) throw err; hubAlert("Couldn't load share links", { description: err.message }); return; }
+  // A refused list read comes back EMPTY (`limits: null`); after a write that must not draw as "none".
+  if (afterWrite && status.limits === null) throw new Error("Share links could not be re-read");
   shareLinks = status.links;
   shareEntitled = status.entitled;
   const active = activeShareLinks(shareLinks, wallId);
@@ -719,15 +721,28 @@ async function createShare(wallId) {
   const hours = Number(document.getElementById("share-expiry")?.value) || undefined;
   const writable = !!document.getElementById("share-writable")?.checked;
   const password = document.getElementById("share-password")?.value?.trim() || undefined;
+  // The hub refuses a short password; say so here rather than as a failure to retry.
+  if (password && password.length < 6) { hubAlert("The password needs at least 6 characters."); return; }
   const btn = shareModalEl?.querySelector("[data-share-create]");
   if (btn) { btn.disabled = true; btn.textContent = "Creating…"; }
+  let link;
   try {
-    const link = await share.create("wall", wallId, { expiresInHours: hours, label: wall?.title, writable, password });
-    try { await navigator.clipboard.writeText(link.url); } catch { /* the re-render shows the url to copy */ }
-    await openShareModal(wallId);
+    link = await share.create("wall", wallId, { expiresInHours: hours, label: wall?.title, writable, password });
   } catch (err) {
     if (btn) { btn.disabled = false; btn.textContent = "Create link"; }
-    hubAlert("Couldn't create share link", { description: err.message });
+    console.error(err);
+    hubAlert(err?.status === 402 && (writable || password || hours > 720)
+      ? "Links with a password, guest messages or a longer expiry need an active plan."
+      : shareFailureLine(err, { action: "create the share link", thing: "wall" }));
+    return;
+  }
+  try { await navigator.clipboard.writeText(link.url); } catch { /* the re-render shows the url to copy */ }
+  // The link exists now; a failed list re-read must not read as a failed create.
+  try { await openShareModal(wallId, { afterWrite: true }); }
+  catch (err) {
+    console.error(err);
+    closeShareModal();
+    hubAlert("Share link created", { description: "Couldn’t refresh the list — open Share again to see it." });
   }
 }
 
@@ -743,8 +758,24 @@ async function revokeShare(id, wallId) {
     description: "Anyone using it loses access immediately.",
     confirmLabel: "Revoke",
   })) return;
-  try { await share.revoke(id); await openShareModal(wallId); }
-  catch (err) { hubAlert("Couldn't revoke share link", { description: err.message }); }
+  try { await share.revoke(id); }
+  catch (err) {
+    console.error(err);
+    // A 404 is a link the hub no longer has: done; the refresh below drops it.
+    if (err?.status !== 404) { hubAlert(shareFailureLine(err, { action: "revoke the share link", thing: "wall" })); return; }
+  }
+  shareLinks = shareLinks.filter(l => l.id !== id);
+  try { await openShareModal(wallId, { afterWrite: true }); }
+  catch (err) {
+    console.error(err);
+    closeShareModal();
+    hubAlert("Share link revoked", { description: "Couldn’t refresh the list — open Share again to see it." });
+    return;
+  }
+  // The hub's 404 also covers another member's link it would not let this one revoke.
+  if (activeShareLinks(shareLinks, wallId).some(l => l.id === id)) {
+    hubAlert("You don’t have permission to revoke the share link.");
+  }
 }
 
 // --- Rendering ---------------------------------------------------------------
