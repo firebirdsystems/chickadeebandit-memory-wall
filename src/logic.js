@@ -212,3 +212,57 @@ export function shareFailureLine(e, { action, thing } = {}) {
   if (e?.status === 404) return `This ${thing} has been removed.`;
   return `Couldn’t ${action} — try again.`;
 }
+
+/**
+ * "Retry after a lost response" (app-template guide): whether a failed
+ * write's answer leaves its outcome unknown — no status, a 400, or a 5xx
+ * other than 507 — so the page reads the row back by its pinned id. A
+ * `UNIQUE_CONSTRAINT` answer is a 400 too: the usual retry of a create that
+ * landed collides on its own pinned id. Only finding the row under that id
+ * says it landed; not found keeps the "already exists" line.
+ */
+export function outcomeUnknown(e) {
+  if (e?.code === "UNIQUE_CONSTRAINT" || /UNIQUE constraint failed/i.test(String(e?.message ?? ""))) return true;
+  const status = Number(e?.status) || 0;
+  return status === 0 || status === 400 || (status >= 500 && status !== 507);
+}
+
+/**
+ * Whether a stored row differs from what the form holds now, over the form's
+ * own fields only, compared as text with a missing value as empty.
+ */
+export function storedDiffers(row, fields) {
+  return Object.keys(fields).some((k) => String(row?.[k] ?? "") !== String(fields[k] ?? ""));
+}
+
+export const SAVED_AS_FIRST = "Saved as first entered — check it and update what changed.";
+
+/**
+ * The line a failed write shows ("Refused, gone, or failed" in the app-template
+ * guide): "try again" only when retrying can work. `action` and `thing` are the
+ * app's own words ("post your message", "message"). An error the app worded for
+ * the member (`forUser`) keeps its message. Decided from the error's `status` /
+ * `code`, never from the hub's text.
+ */
+export function failureLine(e, { action, thing } = {}) {
+  if (e?.forUser) return e.message;
+  if (e?.code === "UNIQUE_CONSTRAINT" || /UNIQUE constraint failed/i.test(String(e?.message ?? ""))) return `That ${thing} already exists.`;
+  if (e?.status === 403) return `You don’t have permission to ${action}.`;
+  if (e?.status === 507) return "The household’s storage is full — free up space first.";
+  if (e?.status === 429) return "Too many tries — wait a minute and try again.";
+  if (e?.status === 404) return `This ${thing} has been removed.`;
+  if (e?.status === 409) return `This ${thing} was changed by someone else — check it first.`;
+  return `Couldn’t ${action} — try again.`;
+}
+
+/**
+ * The line a failed photo upload shows. The upload's two refusals of the file
+ * itself get a line of their own: 413 too large, 415 a type the hub does not
+ * take. 429 is the rate limit. The rest follows `failureLine`.
+ */
+export function uploadFailureLine(e, words) {
+  if (e?.status === 413) return "That file is too large.";
+  if (e?.status === 415) return "That kind of file can’t be uploaded.";
+  if (e?.status === 429) return "Too many tries — wait a minute and try again.";
+  return failureLine(e, words);
+}

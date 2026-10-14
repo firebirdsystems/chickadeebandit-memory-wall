@@ -135,6 +135,7 @@ import {
   canEditPost as canEditPostOf, canHidePost as canHidePostOf, canDeleteWall as canDeleteWallOf,
   visiblePosts as visiblePostsOf, hidePatch, showPatch, statedVisibility, closedAtFor,
   searchableFields, postSearchableFields, shareFailureLine,
+  failureLine, uploadFailureLine, outcomeUnknown, storedDiffers, SAVED_AS_FIRST,
 } from "./logic.js";
 
 // --- Hub runtime globals (empty in demo mode) --------------------------------
@@ -173,6 +174,12 @@ let error = "";
 let loadFailed = false;      // a load failed; cleared when one succeeds
 let notice = "";
 let pendingPhotos = [];      // { id, thumbnailId, url, name } uploaded but not yet attached to a post
+// The composer's post id, minted on its first Post and sent on every retry (the
+// composer is redrawn on every photo added, so it lives here, beside the photos
+// it names). `unsure` is set once a try's answer was lost: that post may be
+// stored and naming the photos, so they are no longer deleted when dropped;
+// `dropped` keeps them until a read-back settles which ones the post names.
+let pendingPost = null;      // { id, unsure, dropped }
 let uploading = false;
 let shareModalEl = null;
 let shareLinks = [];
@@ -202,9 +209,13 @@ async function db(sql, params = []) {
     body: JSON.stringify({ sql, params }),
   });
   const json = await res.json().catch(() => null);
-  if (!res.ok || !json || typeof json !== "object" || json.error) throw new Error(json?.error || "Couldn’t reach the hub. Try again.");
+  if (!res.ok || !json || typeof json !== "object" || json.error) throw Object.assign(new Error(json?.error || "Couldn’t reach the hub. Try again."), { status: res.status, code: json?.code });
   return json;
 }
+
+// An error whose message the app wrote for the member; anything else (the
+// hub's own text) is replaced by a fixed line where it is shown.
+function userError(message) { return Object.assign(new Error(message), { forUser: true }); }
 
 async function loadMembers() {
   if (!CONTEXT) {
@@ -304,7 +315,8 @@ async function refresh() {
   } catch (e) {
     // The list shows the banner; an open wall keeps its own message.
     loadFailed = true;
-    if (view !== "list") error = e.message;
+    console.error(e);
+    if (view !== "list") error = "Couldn’t load the wall — try again.";
     render();
   }
 }
@@ -418,22 +430,59 @@ async function setCoverPhoto(input) {
   try {
     const uploaded = await uploadImage(file);
     const previous = parseIds(wall.cover_file_ids);
+    const words = { action: "save the cover photo", thing: "wall" };
+    // The stored wall, or null when it is gone; a failed read throws.
+    const readWall = async () =>
+      (await db("SELECT * FROM app_memory_wall__walls WHERE id = ?", [wall.id])).rows?.[0] ?? null;
+    let changed;
     try {
-      await db("UPDATE app_memory_wall__walls SET cover_file_ids = ? WHERE id = ?",
-        [JSON.stringify([uploaded.id]), wall.id]);
+      ({ changed } = await db("UPDATE app_memory_wall__walls SET cover_file_ids = ? WHERE id = ?",
+        [JSON.stringify([uploaded.id]), wall.id]));
     } catch (e) {
-      // The wall never took the new cover, so nothing references the upload.
-      await files.delete(uploaded.id).catch(() => {});
       console.error(e);
-      throw new Error("Couldn’t save the cover photo — try again.");
+      // A known refusal (a 4xx other than 400, or 507) never took the new
+      // cover, so nothing references the upload. Anything else may have.
+      const status = Number(e?.status) || 0;
+      if ((status > 400 && status < 500) || status === 507) {
+        await files.delete(uploaded.id).catch(() => {});
+        throw userError(failureLine(e, words));
+      }
+      // Unknown outcome: the wall may name either cover, so neither is deleted
+      // here. The re-read says which one is stored; only the new one stored
+      // means the update landed.
+      let stored;
+      try { stored = await readWall(); }
+      catch (readErr) { console.error(readErr); throw userError(failureLine(e, words)); }
+      if (!stored) throw userError("This wall has been removed.");
+      if (!parseIds(stored.cover_file_ids).includes(uploaded.id)) {
+        wall.cover_file_ids = stored.cover_file_ids;
+        throw userError(failureLine(e, words));
+      }
+      changed = 1;
     }
+    if (changed === 0) {
+      // Refused quietly (the row policy) or the wall is gone: the old cover is
+      // still the one stored, and nothing names the new upload.
+      await files.delete(uploaded.id).catch(() => {});
+      let stored;
+      try { stored = await readWall(); }
+      catch (readErr) { console.error(readErr); throw userError(`Couldn’t ${words.action} — try again.`); }
+      if (!stored) throw userError("This wall has been removed.");
+      wall.cover_file_ids = stored.cover_file_ids;
+      throw userError(`You don’t have permission to ${words.action}.`);
+    }
+    // Confirmed: the wall now names the new cover.
     wall.cover_file_ids = JSON.stringify([uploaded.id]);
     // The replaced cover is now referenced by nothing — reclaim it. (The row
     // survives the edit, so no delete_* lane covers this one.)
     for (const id of previous) await files.delete(id).catch(() => {});
     error = "";
     render();
-  } catch (e) { error = e.message; render(); }
+  } catch (e) {
+    if (!e?.forUser) console.error(e);
+    error = uploadFailureLine(e, { action: "upload the cover photo", thing: "photo" });
+    render();
+  }
 }
 
 async function deleteWall(id) {
@@ -492,11 +541,11 @@ async function restoreWall(id) {
 // photos want one: the cover is drawn as a banner, from the photo itself.
 async function uploadImage(file, { thumbnail = false } = {}) {
   if (!IMAGE_TYPES.includes(file.type)) {
-    throw new Error(`${file.name} isn't an image the hub accepts (JPEG, PNG, WebP, GIF or HEIC).`);
+    throw userError(`${file.name} isn't an image the hub accepts (JPEG, PNG, WebP, GIF or HEIC).`);
   }
   const max = LIMITS.max_file_bytes ?? 10 * 1024 * 1024;
   if (file.size > max) {
-    throw new Error(`${file.name} is larger than the ${Math.round(max / (1024 * 1024))} MB limit.`);
+    throw userError(`${file.name} is larger than the ${Math.round(max / (1024 * 1024))} MB limit.`);
   }
   return files.upload(file, { thumbnail });
 }
@@ -523,7 +572,8 @@ async function addPendingPhotos(input) {
       pendingPhotos.push({ id, thumbnailId, name: file.name, url: files.url(id) });
     }
   } catch (e) {
-    error = e.message;
+    if (!e?.forUser) console.error(e);
+    error = uploadFailureLine(e, { action: "upload the photo", thing: "photo" });
   } finally {
     uploading = false;
     render();
@@ -532,13 +582,17 @@ async function addPendingPhotos(input) {
 
 async function dropPendingPhoto(id) {
   pendingPhotos = pendingPhotos.filter(p => p.id !== id);
-  await files.delete(id).catch(() => {});
+  if (pendingPost?.unsure) pendingPost.dropped.push(id);
+  else await files.delete(id).catch(() => {});
   render();
 }
 
 async function discardPendingPhotos() {
   const stale = pendingPhotos;
+  const unsure = pendingPost?.unsure;
   pendingPhotos = [];
+  pendingPost = null;
+  if (unsure) return;
   for (const photo of stale) await files.delete(photo.id).catch(() => {});
 }
 
@@ -551,8 +605,12 @@ async function createPost(form) {
   const body = form.body.value.trim();
   if (!body && pendingPhotos.length === 0) { form.body.focus(); return; }
 
-  const post = {
-    id: crypto.randomUUID(),
+  // A try whose answer was lost may have stored the post with these photos: a
+  // second press must find that row rather than add another naming them.
+  pendingPost ??= { id: crypto.randomUUID(), unsure: false, dropped: [] };
+  const pin = pendingPost;
+  let post = {
+    id: pin.id,
     wall_id: wall.id,
     member_id: currentMember.id,
     // Denormalized on purpose: the share page's feed projects columns from this
@@ -570,24 +628,67 @@ async function createPost(form) {
     created_at: nowIso(),
   };
   formBusy(form, true);
+  let note = "";
+  // From the moment the request goes out its outcome is unknown: a photo
+  // dropped while it is in flight may be named by the stored post.
+  const wasUnsure = pin.unsure;
+  pin.unsure = true;
   try {
-    await db(
-      `INSERT INTO app_memory_wall__posts
-         (id, wall_id, member_id, author_name, body, file_ids, photo_thumbs, source, status, visibility, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [post.id, post.wall_id, post.member_id, post.author_name, post.body, post.file_ids, post.photo_thumbs,
-       post.source, post.status, post.visibility, post.created_at],
-    );
-    posts = [post, ...posts];
-    pendingPhotos = [];
-    form.reset();
-    error = "";
+    try {
+      await db(
+        `INSERT INTO app_memory_wall__posts
+           (id, wall_id, member_id, author_name, body, file_ids, photo_thumbs, source, status, visibility, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [post.id, post.wall_id, post.member_id, post.author_name, post.body, post.file_ids, post.photo_thumbs,
+         post.source, post.status, post.visibility, post.created_at],
+      );
+    } catch (e) {
+      // Unknown outcome: read the post back by the pinned id. Found means an
+      // earlier try landed. Not found, or the read failed: the post fails, the
+      // id stays pinned, and the photos are kept (that try may yet be stored).
+      if (!outcomeUnknown(e)) {
+        // A known refusal (a 4xx other than 400, or 507) stored nothing; with
+        // no earlier try in doubt, no post names the photos dropped meanwhile.
+        const status = Number(e?.status) || 0;
+        if (!wasUnsure && ((status > 400 && status < 500) || status === 507)) {
+          pin.unsure = false;
+          for (const id of pin.dropped.splice(0)) await files.delete(id).catch(() => {});
+        }
+        throw e;
+      }
+      let stored = null;
+      try { stored = (await db("SELECT * FROM app_memory_wall__posts WHERE id = ?", [pin.id])).rows?.[0] ?? null; }
+      catch (readErr) {
+        // The id is ours: with the read-back failed, a UNIQUE answer may be this
+        // form's own first try, so nothing is known — "try again", not "already exists".
+        console.error(readErr);
+        throw new Error("create outcome unknown", { cause: e });
+      }
+      if (!stored) throw e;
+      console.error(e);
+      // Edited since that first try: what was stored is kept, and said so.
+      if (storedDiffers(stored, { body: post.body, file_ids: post.file_ids, visibility: post.visibility })) note = SAVED_AS_FIRST;
+      post = stored;
+    }
+    if (pendingPost === pin) pendingPost = null;
+    posts = [post, ...posts.filter(p => p.id !== post.id)];
+    // Photos added since the try that landed are not on the stored post: they
+    // stay in the composer for a post of their own.
+    const named = parseIds(post.file_ids);
+    pendingPhotos = pendingPhotos.filter(p => !named.includes(p.id));
+    // Edited since that first try: what was typed stays too.
+    if (!note) form.reset();
+    error = note;
     render();
-  } catch {
+    // The outcome is settled: a photo dropped while it was unknown is reclaimed
+    // unless the stored post names it.
+    for (const id of pin.dropped) if (!named.includes(id)) await files.delete(id).catch(() => {});
+  } catch (e) {
     // Photos already attached are page state, so the message is all a redraw
     // would lose — say it in the form and leave both where they are.
+    console.error(e);
     formBusy(form, false);
-    formFailed(form, "Couldn’t post your message — try again.");
+    formFailed(form, failureLine(e, { action: "post your message", thing: "message" }));
   }
 }
 
@@ -660,7 +761,7 @@ async function openShareModal(wallId, { afterWrite = false } = {}) {
   if (!wall) return;
   let status;
   try { status = await share.listAll(); }
-  catch (err) { if (afterWrite) throw err; hubAlert("Couldn't load share links", { description: err.message }); return; }
+  catch (err) { if (afterWrite) throw err; console.error(err); hubAlert("Couldn’t load the share links — try again."); return; }
   // A refused list read comes back EMPTY (`limits: null`); after a write that must not draw as "none".
   if (afterWrite && status.limits === null) throw new Error("Share links could not be re-read");
   shareLinks = status.links;
@@ -1111,7 +1212,7 @@ document.addEventListener("click", (event) => {
     postQ = "";
     view = "wall";
     error = "";
-    loadPosts(openId).then(render).catch((e) => { error = e.message; render(); });
+    loadPosts(openId).then(render).catch((e) => { console.error(e); error = "Couldn’t load the wall — try again."; render(); });
     return;
   }
   if (target.matches('[data-refresh], [data-testid="load-retry"]')) { refresh(); return; }
