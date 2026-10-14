@@ -121,11 +121,11 @@
     "walls": { "column": "created_by", "on_removed": "keep" },
     "posts": { "column": "member_id", "on_removed": "keep" }
   },
-
-  "delete_file_list_columns": {
-    "walls": ["cover_file_ids"],
-    "posts": ["file_ids"]
+  "file_columns": {
+    "walls": { "list_columns": ["cover_file_ids"] },
+    "posts": { "list_columns": ["file_ids"] }
   },
+
   "delete_cascades": {
     "walls": [
       { "table": "posts", "foreign_key": "wall_id" }
@@ -183,7 +183,6 @@
   },
 
   "resource_limits": {
-    "max_db_bytes": 52428800,
     "max_files_bytes": 1073741824
   }
 }

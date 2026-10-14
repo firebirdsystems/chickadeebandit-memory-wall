@@ -28,8 +28,8 @@ Guest messages are Turnstile-gated, rate-limited per link and per IP, capped at 
 ## Known limits
 
 - **Guests cannot attach photos.** The share-link write surface is text-only platform-wide. Members' photos render on the public wall; a guest can only write. Lifting this needs an anonymous upload endpoint in the hub — the planned phase 2, at which point the wall gains a per-wall pre-approval setting for guest photos.
-- **Deleting a wall deletes its posts first, deliberately.** `delete_file_list_columns` reclaims a post's photos when that post is deleted; the `walls → posts` `delete_cascades` entry can only drop rows. Deleting the parent alone would strand the photos in storage.
-- **A post's photos are fixed once posted.** Change them by deleting the post and writing a new one — that keeps the app off the unlink-on-UPDATE lane entirely.
+- **Deleting a wall deletes its posts first, deliberately.** `file_columns` (`list_columns`) reclaims a post's photos when that post is deleted; the `walls → posts` `delete_cascades` entry can only drop rows. Deleting the parent alone would strand the photos in storage.
+- **A post's photos are fixed once posted.** Change them by deleting the post and writing a new one; the app never UPDATEs the photo column, so the unlink-on-UPDATE reclaim never fires.
 
 ## Development
 
