@@ -6,7 +6,7 @@
 -- A wall is the shareable item. `adult_writable`: adults open and manage walls,
 -- everyone in the household reads them.
 CREATE TABLE IF NOT EXISTS app_memory_wall__walls (
-  id              TEXT PRIMARY KEY,
+  id              TEXT NOT NULL PRIMARY KEY,
   title           TEXT NOT NULL,
   occasion_date   TEXT NOT NULL DEFAULT '',   -- YYYY-MM-DD, household-local (plaintext: _date)
   description     TEXT NOT NULL DEFAULT '',
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS app_memory_wall__walls (
 -- through a writable share link, which inserts here directly (source
 -- 'external', member_id NULL).
 CREATE TABLE IF NOT EXISTS app_memory_wall__posts (
-  id          TEXT PRIMARY KEY,
+  id          TEXT NOT NULL PRIMARY KEY,
   wall_id     TEXT NOT NULL,
   member_id   TEXT,                           -- NULL for external guests
   author_name TEXT NOT NULL DEFAULT '',       -- what a guest typed; members render from the roster
